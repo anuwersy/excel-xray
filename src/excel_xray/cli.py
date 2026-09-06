@@ -56,6 +56,11 @@ def main() -> int:
                     help="model id for --llm (default: claude-opus-5)")
     ap.add_argument("--csv", default=None, metavar="PATH",
                     help="also write the EUC assessment as a CSV table")
+    ap.add_argument("--landscape", action="store_true",
+                    help="emit the portfolio landscape JSON (Keep / Consolidate / "
+                         "Remove per workbook) to stdout")
+    ap.add_argument("--landscape-csv", default=None, metavar="PATH",
+                    help="also write the portfolio landscape as a CSV table")
     ap.add_argument("--max-rows", type=int, default=200_000)
     args = ap.parse_args()
 
@@ -107,7 +112,8 @@ def main() -> int:
     # Assessment-aware modes (HTML report, --assess, --csv). One corpus pass so
     # duplication/consolidation see the whole set.
     assessments = None
-    if batch and (args.assess or args.csv or not args.json):
+    if batch and (args.assess or args.csv or args.landscape
+                  or args.landscape_csv or not args.json):
         assessor = None
         if args.llm:
             from .narrative import ClaudeAssessor
@@ -119,11 +125,20 @@ def main() -> int:
         else:
             assessments = [assess(wxs[0], assessor)]
 
+    # Portfolio landscape: needed for the JSON/CSV flags, and auto-written as an
+    # index whenever a folder of >1 workbook is rendered to HTML.
+    landscape = None
+    if assessments is not None and (
+            args.landscape or args.landscape_csv
+            or (not args.json and not args.assess and len(assessments) > 1)):
+        from .landscape import assess_landscape
+        landscape = assess_landscape([wx for _, wx in batch], assessments)
+
     if args.assess and assessments is not None:
         payload = [assessment_to_dict(a) for a in assessments]
         print(json.dumps(payload if len(payload) != 1 else payload[0],
                          indent=2, default=str))
-    elif not args.json and assessments is not None:
+    elif not args.json and not args.landscape and assessments is not None:
         for (p, wx), a in zip(batch, assessments):
             name = os.path.splitext(os.path.basename(p))[0]
             dest = os.path.join(outdir, f"xray_{name}.html")
@@ -134,12 +149,30 @@ def main() -> int:
             print(f"{wx.parse_status:8} {os.path.basename(p):46} "
                   f"{len(wx.sheets):3} sheets  {regions:3} regions  "
                   f"{low:2} low-conf  -> {dest}")
+        if landscape is not None:
+            from .report import write_landscape_report
+            dest = os.path.join(outdir, "xray_landscape.html")
+            write_landscape_report(landscape, dest)
+            recs = landscape.summary.get("recommendations", {})
+            print(f"landscape {len(landscape.entries):3} workbook(s): "
+                  f"{recs.get('Keep', 0)} keep / {recs.get('Consolidate', 0)} "
+                  f"consolidate / {recs.get('Remove', 0)} remove  -> {dest}")
+
+    if args.landscape and landscape is not None:
+        from .landscape import to_dict as landscape_to_dict
+        print(json.dumps(landscape_to_dict(landscape), indent=2, default=str))
 
     if args.csv and assessments is not None:
         from .tabular import to_csv
         named = [(wx.filename, a) for (_, wx), a in zip(batch, assessments)]
         to_csv(named, args.csv)
         print(f"wrote {args.csv} ({len(named)} workbook(s))", file=sys.stderr)
+
+    if args.landscape_csv and landscape is not None:
+        from .tabular import landscape_to_csv
+        landscape_to_csv(landscape, args.landscape_csv)
+        print(f"wrote {args.landscape_csv} ({len(landscape.entries)} workbook(s))",
+              file=sys.stderr)
 
     total = len(paths)
     print(f"\ncoverage: {ok}/{total} full, {partial} partial, {failed} unreadable",

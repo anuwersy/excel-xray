@@ -134,3 +134,31 @@ def to_csv(named_assessments, path: str) -> str:
                 w.writerow([fname, f"Tab: {r['tab']}", r["type"], r["field"],
                             r["value"], r["basis"], r["confidence"], r["evidence"]])
     return path
+
+
+def landscape_to_csv(landscape, path: str) -> str:
+    """Write the portfolio landscape as one flat CSV — one row per workbook.
+
+    Columns: File, Recommendation, Confidence, Logic Type, Complexity, Cluster,
+    Cluster Role, Top Match, Top Similarity, Relation, Rationale.
+    """
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["File", "Recommendation", "Confidence", "Logic Type",
+                    "Complexity", "Cluster", "Cluster Role", "Top Match",
+                    "Top Similarity", "Relation", "Rationale"])
+        for e in landscape.entries:
+            tm = e.top_match or {}
+            role = ("primary" if e.is_cluster_primary
+                    else "member" if e.cluster_id is not None else "")
+            w.writerow([
+                e.file_name, e.recommendation, e.confidence, e.logic_type,
+                e.complexity,
+                e.cluster_id if e.cluster_id is not None else "",
+                role,
+                tm.get("file", ""),
+                tm.get("similarity", ""),
+                tm.get("relation", ""),
+                "; ".join(e.rationale),
+            ])
+    return path

@@ -357,3 +357,108 @@ def write_report(wx: WorkbookXray, path: str, assessment=None) -> str:
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(build_report(wx, assessment))
     return path
+
+
+# --------------------------------------------------------- landscape report
+
+REC_COLOR = {
+    "Keep": "#167B75",
+    "Consolidate": "#B4531F",
+    "Remove": "#C0392B",
+}
+
+
+def _rec_badge(rec: str) -> str:
+    return (f"<span class='badge' style='background:{REC_COLOR.get(rec, '#888')}'>"
+            f"{_esc(rec)}</span>")
+
+
+def build_landscape_report(landscape) -> str:
+    """A self-contained HTML index across a folder of workbooks: one Keep /
+    Consolidate / Remove recommendation per file, with the similarity behind it.
+
+    Informational only — the report never implies a change was made to any file.
+    """
+    s = landscape.summary
+    recs = s.get("recommendations", {})
+    parts: list[str] = []
+    A = parts.append
+
+    A(f"<!doctype html><meta charset='utf-8'>"
+      f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      f"<title>X-ray landscape</title><style>{CSS}</style><div class='wrap'>")
+
+    A("<header class='top'><div class='eyebrow'>Workbook X-ray &middot; portfolio "
+      "landscape</div><h1>Landscape</h1>"
+      f"<div class='meta'>{s.get('workbooks', 0)} workbook(s) compared &middot; "
+      f"{s.get('clusters', 0)} similarity cluster(s)</div>")
+    A("<div class='vitals'>")
+    for val, label in [
+        (recs.get("Keep", 0), "keep"),
+        (recs.get("Consolidate", 0), "consolidate"),
+        (recs.get("Remove", 0), "remove"),
+        (s.get("clusters", 0), "clusters"),
+        (s.get("estimated_consolidation_groups", 0), "merge groups"),
+    ]:
+        A(f"<div class='vital'><b>{val}</b><span>{label}</span></div>")
+    A("</div></header>")
+
+    if s.get("note"):
+        A(f"<div class='warn'>{_esc(s['note'])}</div>")
+
+    # ---- per-file table -------------------------------------------------
+    A("<section class='assess'><h2>Per-workbook recommendation</h2><div class='scroll'>"
+      "<table class='euc'><tr><th>File</th><th>Recommendation</th><th>Logic</th>"
+      "<th>Complexity</th><th>Cluster</th><th>Closest match</th>"
+      "<th>Rationale</th></tr>")
+    order = {"Remove": 0, "Consolidate": 1, "Keep": 2}
+    for e in sorted(landscape.entries,
+                    key=lambda x: (order.get(x.recommendation, 3), -x.confidence)):
+        tm = e.top_match or {}
+        match = (f"{_esc(tm.get('file'))} "
+                 f"<span class='conf'>{tm.get('similarity', 0):.0%} {_esc(tm.get('relation',''))}</span>"
+                 if tm.get("file") else "&mdash;")
+        cluster = "&mdash;"
+        if e.cluster_id is not None:
+            role = "primary" if e.is_cluster_primary else "member"
+            cluster = f"#{e.cluster_id} <span class='tag'>{role}</span>"
+        conf = f"<span class='conf'>{e.confidence:.2f}</span>"
+        A(f"<tr><td class='fld'>{_esc(e.file_name)}</td>"
+          f"<td>{_rec_badge(e.recommendation)} {conf}</td>"
+          f"<td>{_esc(e.logic_type)}</td><td>{_esc(e.complexity)}</td>"
+          f"<td>{cluster}</td><td>{match}</td>"
+          f"<td><span class='cellv'>{_esc('; '.join(e.rationale))}</span></td></tr>")
+    A("</table></div>")
+
+    # ---- clusters -------------------------------------------------------
+    if landscape.clusters:
+        A("<h3>Similarity clusters</h3><div class='scroll'><table class='euc'>"
+          "<tr><th>Cluster</th><th>Members</th><th>Keep</th><th>Shared logic</th>"
+          "<th>Cohesion</th><th>Contains duplicates</th></tr>")
+        for c in landscape.clusters:
+            A(f"<tr><td class='fld'>#{c.cluster_id}</td>"
+              f"<td><span class='cellv'>{_esc(', '.join(c.member_names))}</span></td>"
+              f"<td>{_esc(c.primary_name)}</td>"
+              f"<td>{_esc(c.shared_logic_type or 'mixed')}</td>"
+              f"<td>{c.cohesion:.0%}</td>"
+              f"<td>{'yes' if c.has_duplicates else 'no'}</td></tr>")
+        A("</table></div>")
+
+    A("<div class='legend2'>"
+      "<span>Keep = distinct, or the canonical copy of a group</span>"
+      "<span>Consolidate = similar workbooks to merge into one</span>"
+      "<span>Remove = a near-duplicate, or file-intrinsic retirement signals</span></div>")
+    A("</section>")
+
+    A("<footer>Advisory only. This landscape ranks structural similarity and "
+      "retirement signals; it never opens, moves or changes a workbook. Actual "
+      "usage is not knowable from a file &mdash; confirm any Remove against "
+      "business use before acting.</footer>")
+    A("</div>")
+    return "".join(parts)
+
+
+def write_landscape_report(landscape, path: str) -> str:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(build_landscape_report(landscape))
+    return path

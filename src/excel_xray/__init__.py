@@ -11,9 +11,15 @@ from __future__ import annotations
 
 from .assessment import Assessment, FileAssessment, TabAssessment, assess
 from .corpus import Fingerprint, assess_corpus, fingerprint, similarity
+from .landscape import Cluster, Landscape, LandscapeEntry, assess_landscape
 from .narrative import ClaudeAssessor, Narrative, OfflineAssessor
 from .ooxml import WorkbookStructure, read_structure
-from .report import build_report, write_report
+from .report import (
+    build_landscape_report,
+    build_report,
+    write_landscape_report,
+    write_report,
+)
 from .scan import (
     SheetXray,
     UnreadableWorkbook,
@@ -45,6 +51,12 @@ __all__ = [
     "fingerprint",
     "similarity",
     "Fingerprint",
+    "assess_landscape",
+    "Landscape",
+    "LandscapeEntry",
+    "Cluster",
+    "build_landscape_report",
+    "write_landscape_report",
     "main",
 ]
 

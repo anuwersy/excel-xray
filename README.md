@@ -15,9 +15,14 @@ uv run excel-xray file.xlsx -o out/            # HTML report (structure + assess
 uv run excel-xray /path/to/folder -o out/      # one report per workbook + corpus findings
 uv run excel-xray file.xlsx --assess           # EUC assessment as JSON to stdout
 uv run excel-xray /path/to/folder --csv euc.csv   # assessment as a flat CSV table
+uv run excel-xray /path/to/folder --landscape     # Keep/Consolidate/Remove per file (JSON)
+uv run excel-xray /path/to/folder --landscape-csv landscape.csv   # …as a flat CSV table
 uv run excel-xray file.xlsx --json             # raw structural scan as JSON
 uv run pytest                                  # accuracy + reader + assessment tests
 ```
+
+Scanning a folder also writes `xray_landscape.html` — a portfolio index that gives
+every workbook one recommendation with the similarity behind it.
 
 ## Two layers
 
@@ -40,6 +45,29 @@ the file versus what still needs a model, a human, or the wider corpus:
 
 Nothing is fabricated: a `drafted` value is never presented as a considered one,
 and fields that genuinely aren't in the file stay `needs_human`.
+
+## Portfolio landscape
+
+Given a folder, the **landscape** layer rolls the per-file corpus comparisons up
+into one decision per workbook, so a controls team can see the whole estate at a
+glance:
+
+| Recommendation | When |
+|---|---|
+| **Keep** | distinct from everything else, or the canonical copy of a duplicate group |
+| **Consolidate** | one of a cluster of similar workbooks that should merge into a single maintained file |
+| **Remove** | a near-duplicate of another file, or a standalone file carrying retirement signals (stale, superseded name, broken logic) |
+
+Look-alikes are grouped into **similarity clusters** (connected by the corpus
+similarity score); within a cluster the freshest, most complete copy is picked as
+the one to keep and the rest are flagged. Every entry carries its closest match
+and a `0–1` similarity, and every recommendation lists the evidence behind it.
+
+It only **informs** — nothing here opens, moves, renames or deletes a workbook.
+And it stays honest about its limits: whether a file is actually *used* is not
+knowable from the file (`needs_human`), so a Remove verdict rests on
+file-intrinsic redundancy or retirement signals and asks to be confirmed against
+business usage before anyone acts on it.
 
 ## Why not openpyxl
 
@@ -84,6 +112,7 @@ Layers, deliberately separated.
 | [assessment.py](src/excel_xray/assessment.py) | Evidence → EUC schema: complexity, logic type, tab categories, dependencies, human-validation, heuristic findings |
 | [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default) or Claude (`--llm`) |
 | [corpus.py](src/excel_xray/corpus.py) | Fingerprint + pairwise compare across a folder → duplication / consolidation |
+| [landscape.py](src/excel_xray/landscape.py) | Portfolio rollup: cluster look-alikes → one **Keep / Consolidate / Remove** recommendation per workbook, with a similarity score |
 | [tabular.py](src/excel_xray/tabular.py) | The review-table schema; drives the HTML tables and the CSV export |
 | [report.py](src/excel_xray/report.py) | Self-contained HTML — no CDN, no network |
 | [util.py](src/excel_xray/util.py) | A1-notation helpers (replaces `openpyxl.utils`) |
