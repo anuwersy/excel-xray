@@ -15,6 +15,7 @@ uv run excel-xray file.xlsx -o out/            # HTML report (structure + assess
 uv run excel-xray /path/to/folder -o out/      # one report per workbook + corpus findings
 uv run excel-xray file.xlsx --assess           # EUC assessment as JSON to stdout
 uv run excel-xray /path/to/folder --csv euc.csv   # assessment as a flat CSV table
+uv run excel-xray /path/to/folder --estate -o out/   # compare EUCs across the estate
 uv run excel-xray file.xlsx --json             # raw structural scan as JSON
 uv run pytest                                  # accuracy + reader + assessment tests
 ```
@@ -83,7 +84,9 @@ Layers, deliberately separated.
 | [scan.py](src/excel_xray/scan.py) | Triage, orchestration, occupancy plate |
 | [assessment.py](src/excel_xray/assessment.py) | Evidence → EUC schema: complexity, logic type, tab categories, dependencies, human-validation, heuristic findings |
 | [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default) or Claude (`--llm`) |
-| [corpus.py](src/excel_xray/corpus.py) | Fingerprint + pairwise compare across a folder → duplication / consolidation |
+| [corpus.py](src/excel_xray/corpus.py) | Per-file duplication/consolidation fields (formula shapes + headers) |
+| [estate.py](src/excel_xray/estate.py) | Estate comparison: four-signal fingerprints, relationship typing, clustering |
+| [estate_report.py](src/excel_xray/estate_report.py) | Standalone estate HTML + pairs CSV |
 | [tabular.py](src/excel_xray/tabular.py) | The review-table schema; drives the HTML tables and the CSV export |
 | [report.py](src/excel_xray/report.py) | Self-contained HTML — no CDN, no network |
 | [util.py](src/excel_xray/util.py) | A1-notation helpers (replaces `openpyxl.utils`) |
@@ -139,6 +142,33 @@ with `--llm` the CLI loads it automatically. `.env` is git-ignored, so the key i
 never committed. The SDK also accepts an `ant auth login` profile if you have
 one. Only a **value-free structural bundle** (headers + normalised formula
 shapes, never cell values) is sent to the model.
+
+## Estate comparison
+
+`--estate` over a folder compares every workbook against every other on four
+independent signals and writes `estate.html` + `estate_pairs.csv`:
+
+| Signal | Captures | A match means |
+|---|---|---|
+| Formula shapes (R1C1 skeletons) | the calculation method | *same method* |
+| Input signature (input headers, sources, connections, links) | what it consumes | *same source / lineage* |
+| Output signature (output-tab headers) | the deliverable | *same output* |
+| Dependency topology (tab-role counts + cross-sheet edges) | the pipeline shape | *same process shape* |
+
+Instead of one blended score, each pair gets a **relationship**: **Duplicate**
+(same method, inputs and outputs), **Same output, different method** (→
+consolidate), **Overlapping logic** (→ extract a reusable component), or **Shared
+source** (common data lineage). Linked pairs are clustered (connected components)
+into **families**, and the report shows the families, a similarity matrix, and
+the per-signal breakdown for each pair.
+
+```python
+from excel_xray import xray_workbook, assess, build_estate
+pairs = [(wx, assess(wx)) for wx in map(xray_workbook, paths)]
+estate = build_estate(pairs)
+for i, j, c in estate.pairs:
+    print(estate.fingerprints[i].file_name, c["relationship"], c["overall"])
+```
 
 ### Privacy
 

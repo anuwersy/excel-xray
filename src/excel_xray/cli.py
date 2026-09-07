@@ -56,6 +56,9 @@ def main() -> int:
                     help="model id for --llm (default: claude-opus-5)")
     ap.add_argument("--csv", default=None, metavar="PATH",
                     help="also write the EUC assessment as a CSV table")
+    ap.add_argument("--estate", action="store_true",
+                    help="compare workbooks across the folder: write an estate "
+                         "report (estate.html + estate_pairs.csv) to the out dir")
     ap.add_argument("--max-rows", type=int, default=200_000)
     args = ap.parse_args()
 
@@ -107,7 +110,7 @@ def main() -> int:
     # Assessment-aware modes (HTML report, --assess, --csv). One corpus pass so
     # duplication/consolidation see the whole set.
     assessments = None
-    if batch and (args.assess or args.csv or not args.json):
+    if batch and (args.assess or args.csv or args.estate or not args.json):
         assessor = None
         if args.llm:
             from .narrative import ClaudeAssessor
@@ -140,6 +143,22 @@ def main() -> int:
         named = [(wx.filename, a) for (_, wx), a in zip(batch, assessments)]
         to_csv(named, args.csv)
         print(f"wrote {args.csv} ({len(named)} workbook(s))", file=sys.stderr)
+
+    if args.estate and assessments is not None:
+        if len(assessments) < 2:
+            print("--estate needs more than one workbook to compare", file=sys.stderr)
+        else:
+            from .estate import build_estate
+            from .estate_report import write_estate_csv, write_estate_report
+            pairs_in = [(wx, a) for (_, wx), a in zip(batch, assessments)]
+            estate = build_estate(pairs_in)
+            html_path = os.path.join(outdir, "estate.html")
+            csv_path = os.path.join(outdir, "estate_pairs.csv")
+            write_estate_report(estate, html_path)
+            write_estate_csv(estate, csv_path)
+            print(f"{len(estate.fingerprints)} workbooks  "
+                  f"{len(estate.clusters)} families  {len(estate.pairs)} linked pairs"
+                  f"  -> {html_path}", file=sys.stderr)
 
     total = len(paths)
     print(f"\ncoverage: {ok}/{total} full, {partial} partial, {failed} unreadable",

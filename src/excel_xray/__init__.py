@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from .assessment import Assessment, FileAssessment, TabAssessment, assess
 from .corpus import Fingerprint, assess_corpus, fingerprint, similarity
+from .estate import EstateResult, build_estate, compare, fingerprint_euc
+from .estate_report import build_estate_report, write_estate_csv, write_estate_report
 from .narrative import ClaudeAssessor, Narrative, OfflineAssessor
 from .ooxml import WorkbookStructure, read_structure
 from .report import build_report, write_report
@@ -45,6 +47,13 @@ __all__ = [
     "fingerprint",
     "similarity",
     "Fingerprint",
+    "build_estate",
+    "compare",
+    "fingerprint_euc",
+    "EstateResult",
+    "build_estate_report",
+    "write_estate_report",
+    "write_estate_csv",
     "main",
 ]
 
