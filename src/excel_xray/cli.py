@@ -52,8 +52,9 @@ def main() -> int:
     ap.add_argument("--llm", action="store_true",
                     help="use the Claude assessor for narrative fields "
                          "(needs the 'anthropic' package + a credential)")
-    ap.add_argument("--model", default="claude-opus-5",
-                    help="model id for --llm (default: claude-opus-5)")
+    ap.add_argument("--model", default=None,
+                    help="model id for --llm (default: $ANTHROPIC_MODEL "
+                         "from the environment / .env, else claude-opus-5)")
     ap.add_argument("--csv", default=None, metavar="PATH",
                     help="also write the EUC assessment as a CSV table")
     ap.add_argument("--estate", action="store_true",
@@ -70,6 +71,10 @@ def main() -> int:
             load_dotenv()
         except ImportError:
             pass
+
+    # Resolve model / token budget: explicit flag wins, then the environment
+    # (ANTHROPIC_MODEL / LLM_MAX_TOKENS, loaded from .env above), then defaults.
+    args.model = args.model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5"
 
     paths = collect(args.target)
     if not paths:
@@ -114,7 +119,8 @@ def main() -> int:
         assessor = None
         if args.llm:
             from .narrative import ClaudeAssessor
-            assessor = ClaudeAssessor(model=args.model)
+            max_tokens = int(os.environ.get("LLM_MAX_TOKENS") or 2000)
+            assessor = ClaudeAssessor(model=args.model, max_tokens=max_tokens)
         wxs = [wx for _, wx in batch]
         if len(wxs) > 1:
             from .corpus import assess_corpus
