@@ -86,6 +86,7 @@ Layers, deliberately separated.
 | [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default) or Claude (`--llm`) |
 | [corpus.py](src/excel_xray/corpus.py) | Per-file duplication/consolidation fields (formula shapes + headers) |
 | [estate.py](src/excel_xray/estate.py) | Estate comparison: four-signal fingerprints, relationship typing, clustering |
+| [estate_insight.py](src/excel_xray/estate_insight.py) | Interprets families → recommendations (offline template or Claude) |
 | [estate_report.py](src/excel_xray/estate_report.py) | Standalone estate HTML + pairs CSV |
 | [tabular.py](src/excel_xray/tabular.py) | The review-table schema; drives the HTML tables and the CSV export |
 | [report.py](src/excel_xray/report.py) | Self-contained HTML — no CDN, no network |
@@ -161,6 +162,13 @@ consolidate), **Overlapping logic** (→ extract a reusable component), or **Sha
 source** (common data lineage). Linked pairs are clustered (connected components)
 into **families**, and the report shows the families, a similarity matrix, and
 the per-signal breakdown for each pair.
+
+**Insight layer.** The scores, relationships and clusters stay deterministic
+(reproducible and auditable). On top of them an *insight* layer interprets each
+family — what it is, and a recommended action (consolidate / keep one / extract
+shared logic / align source) — plus a ranked estate-level opportunities list. It
+runs offline by default (basis `drafted`) and upgrades to Claude with `--llm`
+(basis `inferred`); only fingerprint metadata is sent, never cell values.
 
 ```python
 from excel_xray import xray_workbook, assess, build_estate

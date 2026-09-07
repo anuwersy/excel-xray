@@ -45,6 +45,15 @@ table.mx td.lbl,table.mx th.lbl{text-align:left;white-space:nowrap;font-weight:6
 .legend{display:flex;flex-wrap:wrap;gap:14px;margin:16px 0;font-size:12px;color:#5B6577}
 .legend span{display:flex;align-items:center;gap:6px}
 .dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+.insight{background:#F0F4F9;border:1px solid #D5DAE3;border-left:3px solid #2D6CA2;
+  border-radius:0 3px 3px 0;padding:10px 12px;margin:0 0 12px}
+.insight .act{font-weight:600;color:#10192B}
+.insight .why{color:#5B6577;font-size:12px;margin-top:3px}
+.insight .badge{display:inline-block;font:600 9px/1.4 ui-monospace,monospace;
+  padding:1px 5px;border-radius:2px;color:#fff;margin-left:6px;vertical-align:middle}
+.opps{background:#fff;border:1px solid #D5DAE3;border-radius:4px;padding:12px 16px;margin:8px 0}
+.opps ol{margin:6px 0 0;padding-left:20px}
+.opps li{margin:3px 0}
 footer{margin-top:30px;padding-top:16px;border-top:1px solid #D5DAE3;
   font-size:12.5px;color:#5B6577}
 """
@@ -67,7 +76,10 @@ def _bars(c: dict) -> str:
     return "".join(out) + "</div>"
 
 
-def build_estate_report(estate: EstateResult) -> str:
+_BASIS_COLOR = {"drafted": "#B4531F", "inferred": "#6B4E9E"}
+
+
+def build_estate_report(estate: EstateResult, insight=None) -> str:
     fps = estate.fingerprints
     P = []
     A = P.append
@@ -96,13 +108,33 @@ def build_estate_report(estate: EstateResult) -> str:
         A(f"<span><i class='dot' style='background:{col}'></i>{_esc(rel)}</span>")
     A("</div>")
 
+    # ---- Estate insight (interpretation layer) --------------------------
+    if insight is not None:
+        badge = (f"<span class='badge' style='background:"
+                 f"{_BASIS_COLOR.get(insight.basis, '#888')}'>{_esc(insight.basis)}</span>")
+        A(f"<div class='opps'><b>Estate insight</b>{badge}"
+          f"<p>{_esc(insight.estate_summary)}</p>")
+        if insight.top_opportunities:
+            A("<b>Top opportunities</b><ol>"
+              + "".join(f"<li>{_esc(o)}</li>" for o in insight.top_opportunities)
+              + "</ol>")
+        A("</div>")
+
     # ---- Clusters -------------------------------------------------------
     if estate.clusters:
         A("<h2>Related families</h2>")
+        fam_insights = insight.families if insight is not None else []
         for gi, group in enumerate(estate.clusters, 1):
             names = [fps[i].file_name for i in group]
             A(f"<div class='cluster'><h3>Family {gi} &middot; {len(group)} workbooks</h3>"
               f"<div class='files'>{_esc('  •  '.join(names))}</div>")
+            if gi - 1 < len(fam_insights):
+                fi = fam_insights[gi - 1]
+                b = (f"<span class='badge' style='background:"
+                     f"{_BASIS_COLOR.get(fi.basis, '#888')}'>{_esc(fi.basis)}</span>")
+                A(f"<div class='insight'>{_esc(fi.summary)}"
+                  f"<div class='act'>→ {_esc(fi.recommended_action)}{b}</div>"
+                  f"<div class='why'>{_esc(fi.rationale)}</div></div>")
             inside = [(i, j, c) for i, j, c in estate.pairs
                       if i in group and j in group]
             A("<table><tr><th>Workbook A</th><th>Workbook B</th>"
@@ -151,9 +183,9 @@ def build_estate_report(estate: EstateResult) -> str:
     return "".join(P)
 
 
-def write_estate_report(estate: EstateResult, path: str) -> str:
+def write_estate_report(estate: EstateResult, path: str, insight=None) -> str:
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build_estate_report(estate))
+        fh.write(build_estate_report(estate, insight))
     return path
 
 

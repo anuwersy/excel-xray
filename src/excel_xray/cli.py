@@ -155,12 +155,18 @@ def main() -> int:
             print("--estate needs more than one workbook to compare", file=sys.stderr)
         else:
             from .estate import build_estate
+            from .estate_insight import generate_estate_insight
             from .estate_report import write_estate_csv, write_estate_report
             pairs_in = [(wx, a) for (_, wx), a in zip(batch, assessments)]
             estate = build_estate(pairs_in)
+            insight_assessor = None
+            if args.llm:
+                from .estate_insight import ClaudeEstateAssessor
+                insight_assessor = ClaudeEstateAssessor(model=args.model)
+            insight = generate_estate_insight(estate, insight_assessor)
             html_path = os.path.join(outdir, "estate.html")
             csv_path = os.path.join(outdir, "estate_pairs.csv")
-            write_estate_report(estate, html_path)
+            write_estate_report(estate, html_path, insight)
             write_estate_csv(estate, csv_path)
             print(f"{len(estate.fingerprints)} workbooks  "
                   f"{len(estate.clusters)} families  {len(estate.pairs)} linked pairs"

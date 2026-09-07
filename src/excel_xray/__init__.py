@@ -12,6 +12,12 @@ from __future__ import annotations
 from .assessment import Assessment, FileAssessment, TabAssessment, assess
 from .corpus import Fingerprint, assess_corpus, fingerprint, similarity
 from .estate import EstateResult, build_estate, compare, fingerprint_euc
+from .estate_insight import (
+    ClaudeEstateAssessor,
+    EstateInsight,
+    OfflineEstateAssessor,
+    generate_estate_insight,
+)
 from .estate_report import build_estate_report, write_estate_csv, write_estate_report
 from .narrative import ClaudeAssessor, Narrative, OfflineAssessor
 from .ooxml import WorkbookStructure, read_structure
@@ -54,6 +60,10 @@ __all__ = [
     "build_estate_report",
     "write_estate_report",
     "write_estate_csv",
+    "generate_estate_insight",
+    "EstateInsight",
+    "OfflineEstateAssessor",
+    "ClaudeEstateAssessor",
     "main",
 ]
 
