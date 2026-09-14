@@ -88,25 +88,32 @@ def main() -> int:
     ok = partial = failed = 0
     reasons: dict[str, list[str]] = {}
     batch: list = []  # (path, wx) for assessment-aware output modes
+    timings: dict[str, float] = {}  # path -> extraction seconds, for the report line below
     for p in paths:
+        t0 = time.perf_counter()
         try:
             wx = xray_workbook(p, max_rows=args.max_rows)
         except UnreadableWorkbook as e:
+            elapsed = time.perf_counter() - t0
             failed += 1
             reasons.setdefault(e.category, []).append(os.path.basename(p))
-            print(f"SKIPPED  {os.path.basename(p):46} {e}", file=sys.stderr)
+            print(f"SKIPPED  {os.path.basename(p):46} {e}  ({elapsed:.2f}s)", file=sys.stderr)
             continue
         except Exception as e:  # noqa: BLE001 - report and keep going over a corpus
+            elapsed = time.perf_counter() - t0
             failed += 1
             reasons.setdefault("unexpected", []).append(os.path.basename(p))
-            print(f"FAILED   {os.path.basename(p):46} {type(e).__name__}: {e}",
-                  file=sys.stderr)
+            print(f"FAILED   {os.path.basename(p):46} {type(e).__name__}: {e}  "
+                  f"({elapsed:.2f}s)", file=sys.stderr)
             if os.environ.get("XRAY_DEBUG"):
                 traceback.print_exc()
             continue
+        elapsed = time.perf_counter() - t0
+        timings[p] = elapsed
 
         ok += wx.parse_status == "full"
         partial += wx.parse_status == "partial"
+        print(f"EXTRACT  {os.path.basename(p):46} {elapsed:6.2f}s", file=sys.stderr)
         if args.json:  # raw scan, no assessment
             print(to_json(wx))
         else:
@@ -142,7 +149,7 @@ def main() -> int:
                       if r.detect_confidence < 0.70)
             print(f"{wx.parse_status:8} {os.path.basename(p):46} "
                   f"{len(wx.sheets):3} sheets  {regions:3} regions  "
-                  f"{low:2} low-conf  -> {dest}")
+                  f"{low:2} low-conf  {timings.get(p, 0):5.2f}s  -> {dest}")
 
     if args.csv and assessments is not None:
         from .tabular import to_csv

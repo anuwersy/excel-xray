@@ -169,7 +169,7 @@ class OfflineAssessor:
 
 
 _SYSTEM = (
-    "You review End-User Computing (EUC) spreadsheets for a financial-controls "
+    "You review End User spreadsheets for a financial-controls "
     "team. You are given a value-free structural summary of one workbook "
     "(sheet layout, tab categories, column headers, normalised formula shapes — "
     "never cell values). Write concise, factual assessment prose. Do not invent "

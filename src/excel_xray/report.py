@@ -121,11 +121,31 @@ td.fld{font-weight:600;white-space:nowrap;color:var(--ink)}
 table.matrix td:first-child{font-weight:600;white-space:nowrap}
 table.matrix td{min-width:120px;max-width:320px;white-space:normal;vertical-align:top}
 .cellv{display:block;overflow-wrap:anywhere;word-break:break-word}
+.cellv.trunc{cursor:pointer}
+.cellv.trunc .moreTag{color:#2D6CA2;font-weight:600;white-space:nowrap}
+.cellv.trunc:hover .moreTag{text-decoration:underline}
+.tblTools{display:flex;align-items:center;gap:10px;margin:10px 2px 2px}
+.tblTools input[type=search]{flex:1;max-width:380px;font:13px ui-monospace,monospace;
+  padding:7px 10px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--panel);color:var(--ink)}
+.tblTools input[type=search]:focus{outline:2px solid #2D6CA2;outline-offset:-1px}
+.tblTools .rowCount{font-size:11.5px;color:var(--dim);white-space:nowrap}
 .badge{display:inline-block;font:600 9px/1.4 ui-monospace,monospace;
   letter-spacing:.04em;padding:1px 5px;border-radius:2px;color:#fff;
   white-space:nowrap;vertical-align:middle}
 .legend2{margin:10px 2px 0;font-size:11.5px;color:var(--dim);
   display:flex;flex-wrap:wrap;gap:12px}
+.tabbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:nowrap;
+  overflow-x:auto;gap:3px;background:var(--paper);padding:10px 0 0;margin:0 0 20px;
+  border-bottom:2px solid var(--ink)}
+.tabbtn{flex:none;font:600 12.5px/1 ui-monospace,monospace;padding:10px 15px;
+  background:var(--panel);color:var(--dim);border:1px solid var(--rule);
+  border-bottom:none;border-radius:4px 4px 0 0;cursor:pointer;white-space:nowrap}
+.tabbtn:hover{color:var(--ink)}
+.tabbtn.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+.tabbtn .tct{margin-left:7px;opacity:.6;font-weight:400}
+.tabpanel{display:none}
+.tabpanel.active{display:block}
 """
 
 JS = """
@@ -166,6 +186,55 @@ document.querySelectorAll('canvas[data-plate]').forEach(cv=>{
   drawPlate(cv, d);
   window.addEventListener('resize', ()=>drawPlate(cv, d));
 });
+
+(function initTabs(){
+  const buttons = Array.from(document.querySelectorAll('.tabbtn'));
+  const panels = Array.from(document.querySelectorAll('.tabpanel'));
+  if(!buttons.length) return;
+  function activate(id, scroll){
+    buttons.forEach(b => b.classList.toggle('active', b.dataset.target === id));
+    panels.forEach(p => p.classList.toggle('active', p.id === id));
+    if(scroll){
+      const btn = buttons.find(b => b.dataset.target === id);
+      if(btn) btn.scrollIntoView({block:'nearest', inline:'nearest'});
+    }
+  }
+  buttons.forEach(b => b.addEventListener('click', () => {
+    activate(b.dataset.target, false);
+    history.replaceState(null, '', '#' + b.dataset.target);
+  }));
+  const ids = panels.map(p => p.id);
+  const wanted = (location.hash || '').slice(1);
+  activate(ids.includes(wanted) ? wanted : ids[0], true);
+})();
+
+document.querySelectorAll('.cellv.trunc').forEach(el=>{
+  const tag = el.querySelector('.moreTag');
+  el.addEventListener('click', ()=>{
+    const open = el.classList.toggle('open');
+    el.childNodes[0].nodeValue = open ? el.dataset.full : el.dataset.preview;
+    if(tag) tag.textContent = open ? ' show less' : ' \\u2026 show more';
+  });
+});
+
+document.querySelectorAll('.rowFilter').forEach(inp=>{
+  const table = document.getElementById(inp.dataset.table);
+  if(!table) return;
+  const countEl = inp.parentElement.querySelector('.rowCount');
+  const rows = Array.from(table.querySelectorAll('tr')).filter(tr => !tr.querySelector('th'));
+  function apply(){
+    const q = inp.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(tr=>{
+      const hit = !q || tr.textContent.toLowerCase().includes(q);
+      tr.style.display = hit ? '' : 'none';
+      if(hit) shown++;
+    });
+    if(countEl) countEl.textContent = shown + ' / ' + rows.length + ' rows';
+  }
+  inp.addEventListener('input', apply);
+  apply();
+});
 """
 
 
@@ -178,6 +247,40 @@ def _badge(basis: str) -> str:
             f"{_esc(basis)}</span>")
 
 
+CELL_TRUNCATE_AT = 220
+
+
+def _cellval(value, evidence: str = "") -> str:
+    """Render a table cell value, clamping long text behind a click-to-expand.
+
+    Some fields (external link lists, ambiguous-region dumps, narrative
+    summaries) run to thousands of characters -- inline in full they blow a
+    single table row to a huge height and make the whole table unreadable.
+    Short values render unchanged; long ones show a truncated preview with
+    a "show more" toggle (JS in `JS`), and the full text is always still
+    reachable via the hover title.
+    """
+    s = str(value if value is not None else "")
+    title_attr = f" title='{_esc(evidence)}'" if evidence else ""
+    if len(s) <= CELL_TRUNCATE_AT:
+        return f"<span class='cellv'{title_attr}>{_esc(s)}</span>"
+    cut = s.rfind(";", 0, CELL_TRUNCATE_AT)
+    if cut < CELL_TRUNCATE_AT * 0.5:
+        cut = s.rfind(" ", 0, CELL_TRUNCATE_AT)
+    if cut < CELL_TRUNCATE_AT * 0.5:
+        cut = CELL_TRUNCATE_AT
+    preview = s[:cut].rstrip(" ;,")
+    return (f"<span class='cellv trunc'{title_attr} "
+            f"data-full='{_esc(s)}' data-preview='{_esc(preview)}'>{_esc(preview)}"
+            f"<span class='moreTag'> &hellip; show more</span></span>")
+
+
+def _table_tools(table_id: str, placeholder: str) -> str:
+    return (f"<div class='tblTools'><input type='search' class='rowFilter' "
+            f"data-table='{table_id}' placeholder='{_esc(placeholder)}'>"
+            f"<span class='rowCount'></span></div>")
+
+
 def _render_assessment(assessment) -> str:
     """Render the EUC assessment as the File level / Tab level review tables."""
     parts: list[str] = []
@@ -185,7 +288,9 @@ def _render_assessment(assessment) -> str:
     A("<section class='assess'><h2>EUC assessment</h2>")
 
     # ---- File level summary (Type | Field | Value | Basis) --------------
-    A("<h3>File level summary</h3><table class='euc'>"
+    A("<h3>File level summary</h3>")
+    A(_table_tools("euc-file", "Filter rows… (type, field, value, basis)"))
+    A("<table class='euc' id='euc-file'>"
       "<tr><th>Type</th><th>Field</th><th>Value</th><th>Basis</th></tr>")
     prev = None
     for r in file_rows(assessment):
@@ -193,7 +298,7 @@ def _render_assessment(assessment) -> str:
         prev = r["type"]
         A(f"<tr><td class='grp'>{_esc(grp)}</td>"
           f"<td class='fld'>{_esc(r['field'])}</td>"
-          f"<td><span class='cellv' title='{_esc(r['evidence'])}'>{_esc(r['value'])}</span></td>"
+          f"<td>{_cellval(r['value'], r['evidence'])}</td>"
           f"<td>{_badge(r['basis'])}</td></tr>")
     A("</table>")
 
@@ -204,7 +309,9 @@ def _render_assessment(assessment) -> str:
         by_tab: dict[str, dict] = {}
         for r in rows:
             by_tab.setdefault(r["tab"], {})[r["field"]] = r
-        A("<h3>Tab level details</h3><div class='scroll'><table class='euc matrix'><tr>"
+        A("<h3>Tab level details</h3>")
+        A(_table_tools("euc-tabs", "Filter tabs… (name, category, logic…)"))
+        A("<div class='scroll'><table class='euc matrix' id='euc-tabs'><tr>"
           + "".join(f"<th>{_esc(l)}</th>" for l in labels) + "</tr>")
         for tab, fields in by_tab.items():
             A("<tr>")
@@ -212,8 +319,7 @@ def _render_assessment(assessment) -> str:
                 cell = fields.get(label, {"value": "—", "basis": "", "evidence": ""})
                 badge = _badge(cell["basis"]) if cell["basis"] in (
                     "drafted", "inferred") else ""
-                A(f"<td><span class='cellv' title='{_esc(cell['evidence'])}'>"
-                  f"{_esc(cell['value'])}</span> {badge}</td>")
+                A(f"<td>{_cellval(cell['value'], cell['evidence'])} {badge}</td>")
             A("</tr>")
         A("</table></div>")
 
@@ -272,10 +378,23 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
           f"{_esc(', '.join(hidden))}</span>. Hidden sheets often hold the working "
           f"logic a report depends on &mdash; check before consolidating.</div>")
 
+    # ---- Tab bar: one tab for the EUC assessment (if present) plus one
+    # tab per sheet, so a many-sheet workbook navigates by click instead of
+    # by scrolling past every sheet's plate and region list. ----------------
+    A("<div class='tabbar'>")
     if assessment is not None:
-        A(_render_assessment(assessment))
+        A("<button class='tabbtn' data-target='tab-assessment'>Assessment</button>")
+    for i, s in enumerate(wx.sheets):
+        A(f"<button class='tabbtn' data-target='tab-sheet-{i}'>{_esc(s.name)}"
+          f"<span class='tct'>{len(s.regions)}</span></button>")
+    A("</div>")
 
-    for s in wx.sheets:
+    if assessment is not None:
+        A("<div class='tabpanel' id='tab-assessment'>")
+        A(_render_assessment(assessment))
+        A("</div>")
+
+    for i, s in enumerate(wx.sheets):
         fp = s.formula_profile
         plate = {
             "rows": s.max_row, "cols": s.max_col, "cells": s.occupancy,
@@ -283,6 +402,7 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
                          "right": r.right, "conf": r.detect_confidence,
                          "color": KIND_COLOR.get(r.kind, "#888")} for r in s.regions],
         }
+        A(f"<div class='tabpanel' id='tab-sheet-{i}'>")
         A(f"<section class='sheet'><h2>{_esc(s.name)}"
           f"<span class='tag'>#{s.position + 1}</span>")
         if s.state != "visible":
@@ -338,6 +458,8 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
             for sk, n in fp["top_skeletons"][:10]:
                 A(f"<tr><td class='f'>{_esc(sk)}</td><td class='n'>{n}</td></tr>")
             A("</table></div>")
+
+        A("</section></div>")
 
     A("<div class='legend'>")
     for k, c in KIND_COLOR.items():
