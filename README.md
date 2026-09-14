@@ -6,18 +6,53 @@ Scans a complicated financial workbook and produces two things:
    dependencies and quality flags, and
 2. an **EUC assessment** — the reviewer-facing fields a controls team needs
    (purpose, complexity, logic type, inputs, key findings, per-tab detail,
-   duplication across a folder) — as a self-contained HTML report, JSON, or CSV.
+   duplication across a folder) — as an **Excel workbook by default**, or HTML,
+   JSON, or CSV.
 
 Read-only. Never writes to, moves or renames a source file.
 
 ```bash
-uv run excel-xray file.xlsx -o out/            # HTML report (structure + assessment)
+uv run excel-xray file.xlsx -o out/            # Excel report (structure + assessment)
+uv run excel-xray file.xlsx --format html -o out/  # optional HTML report
 uv run excel-xray /path/to/folder -o out/      # one report per workbook + corpus findings
 uv run excel-xray file.xlsx --assess           # EUC assessment as JSON to stdout
 uv run excel-xray /path/to/folder --csv euc.csv   # assessment as a flat CSV table
 uv run excel-xray /path/to/folder --estate -o out/   # compare EUCs across the estate
 uv run excel-xray file.xlsx --json             # raw structural scan as JSON
 uv run pytest                                  # accuracy + reader + assessment tests
+```
+
+## Excel output
+
+The default output is `xray_<source-name>.xlsx`, with filterable columns,
+frozen headers, wrapped text and numeric confidence percentages:
+
+- **File assessment** and **Tab assessments** contain the existing review
+  schema, including basis, confidence and evidence. Blank **Reviewer value**
+  and **Reviewer notes** columns let you record amendments separately.
+- **Sheet inventory**, **Regions** and **Formula patterns** contain structural
+  detail. Formula patterns are stored as text, not executable formulas.
+- **Warnings** records scan notes and cached errors. **Report info** identifies
+  the source file and explains the report's limits.
+
+For a folder, `--estate` also writes `estate.xlsx` with a summary, linked pairs,
+family membership, recommendations and unrelated workbooks. Use `--format html`
+for the previous HTML reports and estate pairs CSV. `--json`, `--assess` and
+`--csv` remain available; raw `--json` cannot be combined with assessment exports.
+
+Generated Excel reports are automatically excluded from subsequent scans.
+Duplicate source names in subfolders receive distinct report filenames.
+Existing generated reports are replaced on rerun, including reviewer edits;
+save an amended report separately if you want to retain those edits. Source
+workbooks and existing non-report workbooks are never overwritten by the Excel
+exporter. No additional runtime dependency or Excel installation is required.
+
+Python API:
+
+```python
+from excel_xray import xray_workbook, assess, write_excel_report
+scan = xray_workbook("workbook.xlsx")
+write_excel_report(scan, "xray_workbook.xlsx", assess(scan))
 ```
 
 ## Two layers
@@ -90,6 +125,7 @@ Layers, deliberately separated.
 | [estate_report.py](src/excel_xray/estate_report.py) | Standalone estate HTML + pairs CSV |
 | [tabular.py](src/excel_xray/tabular.py) | The review-table schema; drives the HTML tables and the CSV export |
 | [report.py](src/excel_xray/report.py) | Self-contained HTML — no CDN, no network |
+| [excel_report.py](src/excel_xray/excel_report.py) | Native `.xlsx` reports and estate comparisons, using `lxml` and ZIP |
 | [util.py](src/excel_xray/util.py) | A1-notation helpers (replaces `openpyxl.utils`) |
 
 ### The asymmetry that matters
@@ -147,7 +183,8 @@ shapes, never cell values) is sent to the model.
 ## Estate comparison
 
 `--estate` over a folder compares every workbook against every other on four
-independent signals and writes `estate.html` + `estate_pairs.csv`:
+independent signals and writes `estate.xlsx` (or `estate.html` +
+`estate_pairs.csv` with `--format html`):
 
 | Signal | Captures | A match means |
 |---|---|---|

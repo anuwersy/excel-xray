@@ -4,7 +4,7 @@ Reads structure straight from the OOXML package (openpyxl silently drops merged
 ranges, tables, connections, external links and pivot caches) and cells in a
 single ``lxml`` pass (formula and cached value together). Detects hand-built
 table regions, normalises formulas to counted skeletons, and explains the
-result as a self-contained HTML report or JSON.
+result as an Excel workbook, self-contained HTML report or JSON.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from .estate_insight import (
     generate_estate_insight,
 )
 from .estate_report import build_estate_report, write_estate_csv, write_estate_report
+from .excel_report import write_excel_report, write_estate_excel_report
 from .narrative import ClaudeAssessor, Narrative, OfflineAssessor
 from .ooxml import WorkbookStructure, read_structure
 from .report import build_report, write_report
@@ -42,6 +43,8 @@ __all__ = [
     "WorkbookStructure",
     "build_report",
     "write_report",
+    "write_excel_report",
+    "write_estate_excel_report",
     "assess",
     "Assessment",
     "FileAssessment",
