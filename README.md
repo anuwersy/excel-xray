@@ -24,6 +24,11 @@ uv run pytest                                  # accuracy + reader + assessment 
 
 ## Excel output
 
+Business-review enhancements add visibility and multiple tab roles, grouped
+errors with potential output impact, business-purpose input groups, and plain
+language calculation steps. See [Assessment rules and review coverage](docs/REVIEW_RULES.md)
+for the rules, limitations and JSON schema changes.
+
 The default output is `xray_<source-name>.xlsx`, with filterable columns,
 frozen headers, wrapped text and numeric confidence percentages:
 
@@ -34,6 +39,10 @@ frozen headers, wrapped text and numeric confidence percentages:
   detail. Formula patterns are stored as text, not executable formulas.
 - **Warnings** records scan notes and cached errors. **Report info** identifies
   the source file and explains the report's limits.
+- **Error summary**, **Hidden sheet groups**, **Input sources**, and
+  **Calculation steps** explain the business context and targeted review needs.
+  **Review opportunities** retains the full list of simplification and
+  automation candidates when the file summary shows only the leading items.
 
 For a folder, `--estate` also writes `estate.xlsx` with a summary, linked pairs,
 family membership, recommendations and unrelated workbooks. Use `--format html`
@@ -118,6 +127,7 @@ Layers, deliberately separated.
 | [formulas.py](src/excel_xray/formulas.py) | A1 → R1C1 → literal abstraction. Collapses a filled-down column to one skeleton |
 | [scan.py](src/excel_xray/scan.py) | Triage, orchestration, occupancy plate |
 | [assessment.py](src/excel_xray/assessment.py) | Evidence → EUC schema: complexity, logic type, tab categories, dependencies, human-validation, heuristic findings |
+| [review.py](src/excel_xray/review.py) | Business-role rules, grouped input sources, potential error impact and targeted reviewer questions |
 | [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default) or Claude (`--llm`) |
 | [corpus.py](src/excel_xray/corpus.py) | Per-file duplication/consolidation fields (formula shapes + headers) |
 | [estate.py](src/excel_xray/estate.py) | Estate comparison: four-signal fingerprints, relationship typing, clustering |

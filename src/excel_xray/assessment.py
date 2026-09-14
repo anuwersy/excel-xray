@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, field
 from collections import Counter
 
 from .scan import WorkbookXray
+from . import review
 
 # --------------------------------------------------------------------- Field
 
@@ -85,6 +86,7 @@ class FileAssessment:
     potential_retirement: Field = field(default_factory=Field)
     # Workbook logic / Automation
     logic_type: Field = field(default_factory=Field)
+    logic_types: Field = field(default_factory=Field)
     key_calculations_logic: Field = field(default_factory=Field)
     reconciliation_logic: Field = field(default_factory=Field)
     manual_intervention: Field = field(default_factory=Field)
@@ -96,7 +98,9 @@ class TabAssessment:
     """Tab-level detail — the bottom block of the target schema (Step 2)."""
 
     tab_name: Field = field(default_factory=Field)
+    tab_visibility: Field = field(default_factory=Field)
     tab_category: Field = field(default_factory=Field)
+    tab_roles: Field = field(default_factory=Field)
     tab_purpose_description: Field = field(default_factory=Field)
     tab_information_analysis: Field = field(default_factory=Field)
     key_calculation_transformation_logic: Field = field(default_factory=Field)
@@ -110,6 +114,9 @@ class TabAssessment:
 class Assessment:
     file: FileAssessment
     tabs: list[TabAssessment] = field(default_factory=list)
+    error_summary: list[dict] = field(default_factory=list)
+    hidden_groups: list[dict] = field(default_factory=list)
+    input_groups: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------- workbook metrics
@@ -194,8 +201,11 @@ def _logic_type(wx: WorkbookXray, t: dict) -> Field:
     cond = sum(fns[f] for f in ("IF", "IFS", "IFERROR"))
 
     if lookup:
-        scores["Reconciliation"] += lookup + cond * 0.5
-        ev.append(f"{lookup} lookup/match call(s) — matching across sources")
+        scores["Data Transformation"] += lookup
+        ev.append(f"{lookup} lookup/match call(s) — retrieval or mapping, not proof of reconciliation")
+    if any(review.reconciliation(s, []) for s in wx.sheets):
+        scores["Reconciliation"] += max(1, lookup + cond * 0.5)
+        ev.append("reconciliation/variance labels detected")
     if agg:
         scores["Calculation"] += agg
         ev.append(f"{agg} aggregation call(s)")
@@ -209,10 +219,13 @@ def _logic_type(wx: WorkbookXray, t: dict) -> Field:
         scores["Reporting"] += 3
         ev.append(f"{len(wx.pivot_cache_sources)} pivot source(s) — reporting")
 
-    formula_ratio = t["formulas"] / max(1, t["cells"])
-    if formula_ratio < 0.05:
+    if any(review._matches(s.name, r"manual entry|manual input|manual adjustment") for s in wx.sheets):
         scores["Manual Input"] += 4
-        ev.append(f"only {formula_ratio:.0%} of cells are formulas — largely manual")
+        ev.append("tab name suggests manual capture; actual workflow requires confirmation")
+
+    if t["formulas"] and not scores:
+        scores["Calculation"] += 1
+        ev.append("worksheet formulas perform arithmetic or reference-based calculations")
 
     if not scores:
         return Field.derived("Other", 0.4, ev or ["no dominant logic signal"])
@@ -225,15 +238,14 @@ def _logic_type(wx: WorkbookXray, t: dict) -> Field:
 
 def _key_inputs(wx: WorkbookXray) -> Field:
     inputs: list[str] = []
-    inputs += [f"linked workbook: {x}" for x in wx.external_links]
+    inputs += [f"linked workbook: {review.short_source(x)}" for x in wx.external_links]
     inputs += [f"connection: {c.get('name') or c.get('type') or 'unnamed'}"
                for c in wx.connections]
     inputs += [f"pivot source: {p}" for p in wx.pivot_cache_sources]
     if inputs:
         return Field.extracted(inputs)
     return Field(value=None, basis="needs_llm",
-                 evidence=["no external links/connections — inputs are manual or "
-                           "embedded; naming the business datasets needs the model"])
+                 evidence=["no external links/connections declared; embedded sources and their provenance require tab-level review"])
 
 
 def _source_system(wx: WorkbookXray) -> Field:
@@ -276,32 +288,21 @@ def _key_calculations(wx: WorkbookXray, t: dict) -> Field:
 
 
 def _manual_intervention(wx: WorkbookXray, t: dict) -> Field:
-    ev = [f"{t['non_formula_cells']:,} non-formula populated cells (potential manual entry)"]
+    ev = [f"{t['non_formula_cells']:,} stored cells; these may be imported, pasted, labels or manual entries"]
     if t["hardcoded"]:
-        ev.append(f"{t['hardcoded']} formula(s) contain a hardcoded number (buried input)")
-    manual_tabs = [
-        s.name for s in wx.sheets
-        if s.populated_cells and s.formula_profile.get("total", 0) / s.populated_cells < 0.05
-    ]
-    if manual_tabs:
-        ev.append(f"largely-manual tab(s): {', '.join(manual_tabs)}")
-    ratio = t["non_formula_cells"] / max(1, t["cells"])
-    return Field.derived(
-        "High" if ratio > 0.7 else "Medium" if ratio > 0.3 else "Low",
-        0.6, ev,
-    )
+        ev.append(f"{t['hardcoded']} formula(s) contain hardcoded numeric constants; these are not necessarily manual assumptions")
+    return Field(value="Not established — confirm which inputs are keyed, pasted, adjusted or overridden, by whom and how often.",
+                 basis="needs_human", evidence=ev)
 
 
 def _macros_links(wx: WorkbookXray) -> Field:
     parts: list[str] = []
     if wx.has_vba:
-        parts.append("VBA macros present")
+        parts.append("VBA macros present; code and invocation paths are not inspected. Confirm the macro use case, trigger, affected tabs and output with the owner.")
     if wx.has_power_query:
-        parts.append("Power Query / DataMashup present")
-    if wx.external_links:
-        parts.append(f"{len(wx.external_links)} external workbook link(s)")
-    if wx.connections:
-        parts.append(f"{len(wx.connections)} data connection(s)")
+        parts.append("Power Query / DataMashup present; refresh steps and business use require confirmation.")
+    if wx.external_links or wx.connections:
+        parts.append("External data dependencies are described in Key Inputs.")
     return Field.extracted(parts or ["none detected"])
 
 
@@ -354,14 +355,13 @@ def _recon_signals(wx: WorkbookXray, t: dict) -> list[str]:
 
 
 def _reconciliation_logic(wx: WorkbookXray, t: dict) -> Field:
-    signals = _recon_signals(wx, t)
-    if not signals:
-        return Field.derived(
-            "No reconciliation pattern detected", 0.5,
-            ["no lookup/variance/tolerance logic or reconciliation-labelled headers"],
-        )
-    return Field.derived({"matching_and_checks": signals}, 0.6,
-                         ["heuristic from functions, formula shapes and headers"])
+    reads, _ = _dependency_maps(wx)
+    candidates = [item for s in wx.sheets if (item := review.reconciliation(s, reads[s.name]))]
+    if not candidates:
+        return Field.derived("No reconciliation pattern detected", 0.5,
+                             ["Lookup functions alone are not proof of reconciliation"])
+    return Field.derived({"reconciliations": candidates}, 0.6,
+        ["Sources are observed references; comparison direction, keys and tolerances require confirmation"])
 
 
 def _simplification(wx: WorkbookXray, t: dict) -> Field:
@@ -377,14 +377,9 @@ def _simplification(wx: WorkbookXray, t: dict) -> Field:
     if t["volatile"]:
         ops.append(f"{t['volatile']} volatile function(s) (OFFSET/INDIRECT/…) — replace "
                    "with structured references/tables")
-    hidden = [s.name for s in wx.sheets if s.state != "visible"]
-    if hidden:
-        ops.append(f"hidden sheet(s) {hidden} — remove if obsolete")
     errors = sum(len(s.error_cells) for s in wx.sheets)
     if errors:
         ops.append(f"{errors} cached error cell(s) — fix or remove broken logic")
-    if len(wx.sheets) > 15:
-        ops.append(f"{len(wx.sheets)} sheets — consider consolidating tabs")
 
     verdict = "Yes" if len(ops) >= 2 else "Possibly" if ops else "No"
     conf = 0.55 + 0.1 * min(3, len(ops))
@@ -398,9 +393,6 @@ def _automation(wx: WorkbookXray, t: dict) -> Field:
     drivers: list[str] = []
     against: list[str] = []
 
-    manual_ratio = t["non_formula_cells"] / max(1, t["cells"])
-    if manual_ratio > 0.5:
-        drivers.append(f"{manual_ratio:.0%} of cells manually entered — repetitive manual effort")
     comp = t["formulas"] / t["distinct"] if t["distinct"] else 0
     if comp >= 5:
         drivers.append(f"systematic formulas ({comp:.0f}x reuse) — rules are regular and codifiable")
@@ -408,16 +400,17 @@ def _automation(wx: WorkbookXray, t: dict) -> Field:
         against.append("many bespoke one-off formulas — logic is not uniform")
     if wx.connections or wx.external_links:
         drivers.append("existing data connections/links — source is already systemised")
-    if _recon_signals(wx, t):
+    if any(review.reconciliation(s, []) for s in wx.sheets):
         drivers.append("reconciliation/lookup logic — a classic automation target")
     if wx.has_vba:
         drivers.append("already partly automated via VBA/macros")
 
-    verdict = "Yes" if len(drivers) >= 2 else "Possibly" if drivers else "Unlikely"
+    verdict = "Candidate — workflow confirmation required" if drivers else "Not established"
     conf = 0.55 + 0.1 * min(3, len(drivers))
     return Field.derived(
         {"verdict": verdict, "drivers": drivers or ["no strong automation drivers"],
-         "against": against},
+         "against": against,
+         "workflow_confirmation": "Confirm the actual repeated step, source availability, frequency, exception handling and approval controls before estimating automation benefit."},
         min(conf, 0.85), [f"{len(drivers)} driver(s), {len(against)} counter-signal(s)"],
     )
 
@@ -430,19 +423,10 @@ def _retirement(wx: WorkbookXray) -> Field:
     name = wx.filename.lower()
     if any(k in name for k in _SUPERSEDED_NAMES):
         signals.append("filename suggests a superseded/backup copy")
-    hidden = [s.name for s in wx.sheets if s.state != "visible"]
-    if wx.sheets and len(hidden) >= len(wx.sheets) / 2:
-        signals.append(f"{len(hidden)}/{len(wx.sheets)} sheets hidden — possibly disused")
-    errors = sum(len(s.error_cells) for s in wx.sheets)
-    if errors and errors >= max(3, 0.02 * max(1, sum(s.populated_cells for s in wx.sheets))):
-        signals.append(f"{errors} cached error cell(s) — logic may be broken/abandoned")
-
-    if signals:
-        return Field.derived({"verdict": "Review for retirement", "signals": signals},
-                             0.5, ["heuristic; confirm against business usage"])
-    return Field(value={"verdict": "No automated retirement signal"}, basis="needs_human",
-                 evidence=["retirement depends on business usage/recurrence, not "
-                           "knowable from the file alone"])
+    return Field(value={"verdict": "Not established — owner decision required",
+                        "signals": signals,
+                        "confirmation": "Confirm active usage, recipients, replacement coverage and retention requirements. Hidden sheets and cached errors are not retirement evidence."},
+                 basis="needs_human", evidence=signals + ["file age and naming are context only, not proof of disuse"])
 
 
 _BUSINESS_AREA = {
@@ -482,9 +466,9 @@ def assess_file(wx: WorkbookXray) -> FileAssessment:
     fa.purpose_of_file = Field.pending("needs_llm", "narrative from structure + headers")
     fa.key_output_outcome = Field.pending("needs_llm", "business outcome the model supports")
     fa.key_outputs = Field.pending("needs_llm", "name outputs from terminal/reporting tabs")
-    fa.usage_frequency = Field.pending("needs_human", "not knowable from the file")
-    fa.completion_timeline = Field.pending("needs_human", "not knowable from the file")
-    fa.output_recipient = Field.pending("needs_human", "downstream consumer is external context")
+    fa.usage_frequency = Field.pending("needs_human", "How often is this process run: daily, monthly, quarterly or ad hoc?")
+    fa.completion_timeline = Field.pending("needs_human", "What is the completion deadline relative to period-end, and how long does preparation take?")
+    fa.output_recipient = Field.pending("needs_human", "Which team, person or downstream process receives the final deliverable?")
 
     # Key AI Finding / Observation — heuristic (Step 3); corpus ones deferred
     fa.potential_duplication = Field.pending("needs_corpus", "needs the folder of workbooks")
@@ -507,14 +491,6 @@ def assess_file(wx: WorkbookXray) -> FileAssessment:
 
 # ------------------------------------------------------- tab-level (Step 2)
 
-# Tabs whose best category scores below this are left "Uncertain" for the model,
-# rather than forced into a bucket.
-_CATEGORY_MIN_CONF = 0.55
-
-_LOOKUP_FNS = ("VLOOKUP", "HLOOKUP", "XLOOKUP", "MATCH", "INDEX", "LOOKUP")
-_COND_FNS = ("IF", "IFS", "IFERROR", "IFNA")
-
-
 def _sheet_ratio(s) -> float:
     return s.formula_profile.get("total", 0) / max(1, s.populated_cells)
 
@@ -526,12 +502,13 @@ def _dependency_maps(wx: WorkbookXray) -> tuple[dict, dict]:
     ``read_by[name]`` = set of sheets that reference this tab (its downstream).
     """
     names = {s.name for s in wx.sheets}
+    canonical = {name.casefold(): name for name in names}
     reads: dict[str, set] = {}
     read_by: dict[str, set] = {n: set() for n in names}
     for s in wx.sheets:
         refs = {
-            r for r in s.formula_profile.get("referenced_sheets", {})
-            if r in names and r != s.name
+            canonical[r.casefold()] for r in s.formula_profile.get("referenced_sheets", {})
+            if r.casefold() in canonical and r.casefold() != s.name.casefold()
         }
         reads[s.name] = refs
         for r in refs:
@@ -540,73 +517,13 @@ def _dependency_maps(wx: WorkbookXray) -> tuple[dict, dict]:
 
 
 def _tab_category(s, wx, has_downstream: bool) -> Field:
-    """Auto-map to Input / Calculation / Mapping / Control Check / Validation /
-    Output, flagging low-confidence tabs as Uncertain (needs_llm)."""
-    name = s.name.lower()
-    fp = s.formula_profile
-    total_f = fp.get("total", 0)
-    ratio = _sheet_ratio(s)
-    fns = dict(fp.get("top_functions", []))
-    lookup = sum(fns.get(f, 0) for f in _LOOKUP_FNS)
-    cond = sum(fns.get(f, 0) for f in _COND_FNS)
-    kinds = [r.kind for r in s.regions]
-    scores: Counter = Counter()
-    ev: list[str] = []
-
-    def hint(*words) -> bool:
-        return any(w in name for w in words)
-
-    # Output
-    if hint("output", "report", "summary", "mi ", "mi_", "pack", "dashboard", "result"):
-        scores["Output"] += 2; ev.append("name suggests output/reporting")
-    if total_f and not has_downstream:
-        scores["Output"] += 1; ev.append("terminal tab (not referenced by other tabs)")
-    if wx.pivot_cache_sources:
-        scores["Output"] += 0.5
-
-    # Input
-    if hint("input", "data", "raw", "extract", "source", "feed", "import"):
-        scores["Input"] += 2; ev.append("name suggests input/data")
-    if ratio < 0.1 and s.populated_cells > 10:
-        scores["Input"] += 1.5; ev.append(f"low formula ratio {ratio:.0%} — mostly stored data")
-        if has_downstream:
-            scores["Input"] += 1; ev.append("read by other tabs — feeds the model")
-
-    # Calculation
-    if hint("calc", "working", "model", "engine", "compute"):
-        scores["Calculation"] += 2; ev.append("name suggests calculation/working")
-    if "calculation" in kinds:
-        scores["Calculation"] += 2; ev.append("calculation region detected")
-    if ratio > 0.4:
-        scores["Calculation"] += 1.5; ev.append(f"high formula ratio {ratio:.0%}")
-
-    # Mapping
-    if hint("map", "lookup", "reference", "xref", "lob", "code"):
-        scores["Mapping"] += 2; ev.append("name suggests mapping/lookup table")
-    if total_f and lookup >= total_f * 0.3:
-        scores["Mapping"] += 1.5; ev.append(f"{lookup} lookup/match call(s)")
-
-    # Control Check (automated tie-out) vs Validation (manual review)
-    if hint("check", "control", "tie", "recon", "reconcil", "proof", "agree"):
-        scores["Control Check"] += 2.5; ev.append("name suggests a control/reconciliation check")
-    if total_f and cond >= total_f * 0.4:
-        scores["Control Check"] += 1; ev.append("comparison/conditional-heavy")
-    if s.error_cells:
-        scores["Control Check"] += 0.5; ev.append(f"{len(s.error_cells)} cached error cell(s)")
-    if hint("valid", "review", "qa", "signoff", "sign-off", "approv"):
-        scores["Validation"] += 2.5; ev.append("name suggests validation/review")
-
-    if not scores:
+    detected = review.roles(s, has_downstream)
+    if detected == ["Uncertain"]:
         return Field(value="Uncertain", basis="needs_llm", confidence=0.3,
-                     evidence=ev + ["no strong category signal — defer to model"])
-    top, sc = scores.most_common(1)[0]
-    conf = 0.4 + 0.5 * (sc / sum(scores.values()))
-    ranked = ", ".join(f"{k}={v:.1f}" for k, v in scores.most_common())
-    ev.append(f"scores: {ranked}")
-    if conf < _CATEGORY_MIN_CONF:
-        return Field(value="Uncertain", basis="needs_llm", confidence=round(conf, 2),
-                     evidence=ev + [f"top category below {_CATEGORY_MIN_CONF} confidence"])
-    return Field.derived(top, conf, ev)
+                     evidence=["No strong tab-role signal; confirm purpose with the owner"])
+    return Field.derived(detected[0], 0.65 if len(detected) > 1 else 0.75,
+                         ["Role candidates from labels, regions, formulas and dependencies",
+                          "Detected roles: " + ", ".join(detected)])
 
 
 def _tab_information(s, has_upstream: bool, has_downstream: bool) -> Field:
@@ -631,26 +548,19 @@ def _tab_information(s, has_upstream: bool, has_downstream: bool) -> Field:
 
 def _tab_key_calc(s) -> Field:
     fp = s.formula_profile
-    if not fp.get("total"):
-        return Field.extracted([], ["tab has no formulas"])
-    shapes = [f"{sk}  (×{n})" for sk, n in fp.get("top_skeletons", [])[:6]]
-    fns = [f"{fn}×{n}" for fn, n in fp.get("top_functions", [])[:8]]
-    return Field.extracted(
-        {"top_functions": fns, "top_formula_shapes": shapes},
-        [f"{fp['total']} formulas, {fp.get('distinct_skeletons', 0)} distinct shapes"],
-    )
+    return Field.derived(review.calculation(s), 0.65,
+        [f"{fp.get('total', 0)} formulas, {fp.get('distinct_skeletons', 0)} distinct shapes; workload is not proof of business complexity"])
 
 
 def _tab_upstream(s, wx, reads_set: set) -> Field:
-    deps: list[str] = []
-    deps += [f"sheet: {r}" for r in sorted(reads_set)]
-    if s.formula_profile.get("external_count", 0):
-        deps += [f"external workbook: {x}" for x in wx.external_links] or \
-                ["external workbook link(s)"]
-    fns = dict(s.formula_profile.get("top_functions", []))
-    if any(fns.get(f) for f in _LOOKUP_FNS):
-        deps.append("lookup tables (VLOOKUP/INDEX/MATCH targets)")
-    return Field.extracted(deps or ["none — self-contained tab"])
+    sources = s.formula_profile.get("external_sources", [])
+    return Field.derived({
+        "within_workbook": sorted(reads_set),
+        "external_files": sorted({review.short_source(x) for x in sources}),
+        "unresolved_external": bool(s.formula_profile.get("unresolved_external_indices") or
+                                    (s.formula_profile.get("external_count") and not sources)),
+        "scope": "Observed formula references only; connections, named ranges and dynamic references may be unresolved."
+    }, 0.75, ["External paths shortened to filenames; unresolved targets are not assigned to every tab"])
 
 
 def _tab_downstream(s, read_by_set: set) -> Field:
@@ -660,40 +570,20 @@ def _tab_downstream(s, read_by_set: set) -> Field:
                "other_files": None},
         basis="derived" if in_wb else "extracted",
         confidence=1.0,
-        evidence=["in-workbook edges are exact; cross-file consumers need the "
-                  "corpus (needs_corpus)"],
+        evidence=["observed formula references; dynamic, named and VBA dependencies may be absent; cross-file consumers require additional evidence"],
     )
 
 
 def _human_validation(s, wx) -> tuple[Field, Field]:
-    reasons: list[str] = []
-    fp = s.formula_profile
-    if s.error_cells:
-        reasons.append(f"{len(s.error_cells)} cached error cell(s): "
-                       + ", ".join(s.error_cells[:3]))
-    if fp.get("hardcoded_literal_count"):
-        reasons.append(f"{fp['hardcoded_literal_count']} formula(s) with a hardcoded "
-                       "number (buried assumption)")
-    if fp.get("volatile_count"):
-        reasons.append(f"{fp['volatile_count']} volatile function(s) — result depends "
-                       "on recalculation state")
-    if fp.get("external_count"):
-        reasons.append("references external workbook(s) — values not verifiable here")
-    low_conf = [r.ref for r in s.regions if r.detect_confidence < 0.70]
-    if low_conf:
-        reasons.append(f"ambiguous region layout at {', '.join(low_conf)}")
-    if wx.has_vba:
-        reasons.append("workbook contains VBA — logic may be hidden from the grid")
-
-    required = bool(reasons)
-    yn = Field.derived("Y" if required else "N", 0.7 if required else 0.55,
-                       [f"{len(reasons)} red flag(s)" if required
-                        else "no automated red flags on this tab"])
-    reason = Field.derived(
-        reasons or ["none from automated checks; still subject to normal sampling"],
-        0.7, ["triggers are heuristic; a clean tab is not a guarantee"],
+    _, read_by = _dependency_maps(wx)
+    detected = review.roles(s, bool(read_by[s.name]))
+    reasons = review.review_questions(s, detected[0], detected)
+    return (
+        Field.derived("Y" if reasons else "N", 0.7,
+                      [f"{len(reasons)} targeted review question(s); no blanket flag for VBA or hidden status"]),
+        Field.derived(reasons or ["No targeted question; still subject to normal review sampling."],
+                      0.7, ["A clean tab is not proof of correctness"]),
     )
-    return yn, reason
 
 
 def assess_tab(s, wx, reads_set, read_by_set) -> TabAssessment:
@@ -702,8 +592,15 @@ def assess_tab(s, wx, reads_set, read_by_set) -> TabAssessment:
     has_down = bool(read_by_set)
     ta.tab_name = Field.extracted(s.name,
                                   ["hidden sheet" for _ in [1] if s.state != "visible"])
+    ta.tab_visibility = Field.extracted({"visible": "Visible", "hidden": "Hidden", "veryHidden": "Very hidden"}.get(s.state, s.state))
     ta.tab_category = _tab_category(s, wx, has_down)
+    ta.tab_roles = Field.derived(review.roles(s, has_down), 0.65, ["A tab can contain multiple functional roles; primary role retained for comparisons"])
     ta.tab_information_analysis = _tab_information(s, has_up, has_down)
+    category = ta.tab_category.value
+    info = {"Output": "output", "Input": "data input", "Mapping": "supporting",
+            "Calculation": "intermediate workings", "Control Check": "intermediate workings"}.get(category)
+    if info:
+        ta.tab_information_analysis = Field.derived(info, 0.65, ["Primary role and observed dependencies; a report can also feed downstream tabs"])
     ta.key_calculation_transformation_logic = _tab_key_calc(s)
     ta.upstream_dependencies = _tab_upstream(s, wx, reads_set)
     ta.downstream_dependencies = _tab_downstream(s, read_by_set)
@@ -735,6 +632,72 @@ def _apply_narrative(a: Assessment, narr, basis: str, label: str) -> None:
         put(ta.tab_purpose_description, narr.tabs.get(ta.tab_name.value))
 
 
+def _business_review(a, wx, reads, read_by):
+    """Keep technical evidence but lead with business activities and uncertainty."""
+    fa = a.file
+    a.input_groups = review.input_groups(wx, a.tabs, read_by)
+    fa.key_inputs = Field.derived(a.input_groups, 0.65,
+        ["Purposes inferred from source labels; consumers listed only when observed; essentiality requires owner confirmation"])
+    a.error_summary = review.error_summary(wx, a.tabs, read_by)
+    a.hidden_groups = review.hidden_groups(wx, a.tabs, read_by)
+    detected = [fa.logic_type.value] if fa.logic_type.value != "Other" else []
+    role_logic = {"Calculation": "Calculation", "Output": "Reporting",
+                  "Mapping": "Data Transformation", "Control Check": "Reconciliation"}
+    for t in a.tabs:
+        for role in t.tab_roles.value:
+            if role in role_logic:
+                detected.append(role_logic[role])
+    for s in wx.sheets:
+        functions = dict(s.formula_profile.get("top_functions", []))
+        if any(functions.get(f) for f in ("LEFT", "RIGHT", "MID", "TRIM", "TEXT", "XLOOKUP", "VLOOKUP")):
+            detected.append("Data Transformation")
+        if review._matches(s.name, r"manual entry|manual input|manual adjustment"):
+            detected.append("Manual Input")
+    if wx.has_power_query:
+        detected.append("Data Transformation")
+    detected = list(dict.fromkeys(detected)) or ["Other"]
+    fa.logic_types = Field.derived(detected, 0.65, ["Multiple activities can coexist; name-based manual capture is a candidate, not an observed workflow"])
+    fa.business_area_process = Field.derived(
+        "; ".join(_BUSINESS_AREA.get(x, x) for x in detected), 0.65,
+        ["Combined process candidates from tab roles and formula operations"])
+    calculation_sheets = sorted((s for s in wx.sheets if s.formula_profile.get("total")),
+                               key=lambda s: -s.formula_profile.get("total", 0))
+    operations = [review.calculation(s)["summary"] for s in calculation_sheets]
+    existing = fa.key_calculations_logic.value or {}
+    if not isinstance(existing, dict):
+        existing = {}
+    existing["summary"] = "\n".join(operations[:5]) or "No worksheet calculations detected."
+    if len(operations) > 5:
+        existing["summary"] += f"\nShowing the five largest formula workloads; all {len(operations)} tab operations appear in Calculation steps."
+    existing["steps"] = [{"tab": s.name, "inputs": sorted(reads[s.name]),
+                           "operation": review.calculation(s)["summary"],
+                           "potential_outputs": sorted(review.reachable(s.name, read_by) & review.output_names(a.tabs))}
+                          for s in wx.sheets if s.formula_profile.get("total")]
+    fa.key_calculations_logic = Field.derived(existing, 0.65,
+        ["Business operation summaries inferred from formulas and labels; technical patterns retained for traceability"])
+    opportunities, automation_steps = [], []
+    for s in wx.sheets:
+        fp = s.formula_profile
+        activity = review.calculation(s)["summary"]
+        if fp.get("hardcoded_literal_count", 0) > 5:
+            opportunities.append(f"{s.name}: confirm which hardcoded numbers are business assumptions before centralising them. Activity: {activity}")
+        if fp.get("volatile_count"):
+            opportunities.append(f"{s.name}: review recalculation-dependent logic for a more stable design. Activity: {activity}")
+        count, distinct = fp.get("total", 0), fp.get("distinct_skeletons", 0)
+        if count > 50 and distinct and count / distinct < 3:
+            opportunities.append(f"{s.name}: review one-off calculation rules for standardisation. Activity: {activity}")
+        if count and distinct and count / distinct >= 5:
+            automation_steps.append(f"{s.name}: candidate to standardise repeated calculation rules; inputs: {', '.join(sorted(reads[s.name])) or 'local inputs (confirm source)'}. Confirm whether any manual work actually occurs before automating. Activity: {activity}")
+    fa.potential_simplification = Field.derived(
+        {"verdict": "Review candidates" if opportunities else "No supported candidate identified",
+         "opportunities": opportunities}, 0.65,
+        ["Opportunities tied to named activities; cached errors are in Error summary, not treated as retirement evidence"])
+    au = fa.potential_automation.value
+    au["steps"] = automation_steps
+    if not automation_steps:
+        au["steps"] = ["No repeated manual step established. Ask the owner to describe source extraction, copying, adjustments and approvals."]
+
+
 def assess(wx: WorkbookXray, assessor=None) -> Assessment:
     """Full assessment: deterministic fields (Steps 1-3) plus the narrative
     fields (Step 4) filled by ``assessor`` — the offline stub by default, so the
@@ -744,9 +707,10 @@ def assess(wx: WorkbookXray, assessor=None) -> Assessment:
     reads, read_by = _dependency_maps(wx)
     tabs = [
         assess_tab(s, wx, reads.get(s.name, set()), read_by.get(s.name, set()))
-        for s in wx.sheets
+        for s in sorted(wx.sheets, key=lambda s: (s.state != "visible", s.position))
     ]
     a = Assessment(file=assess_file(wx), tabs=tabs)
+    _business_review(a, wx, reads, read_by)
 
     assessor = assessor or OfflineAssessor()
     narr = assessor.narrate(build_bundle(a, wx))
@@ -755,4 +719,4 @@ def assess(wx: WorkbookXray, assessor=None) -> Assessment:
 
 
 def to_dict(a: Assessment) -> dict:
-    return {"file": asdict(a.file), "tabs": [asdict(t) for t in a.tabs]}
+    return asdict(a)

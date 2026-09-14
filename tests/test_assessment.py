@@ -39,7 +39,8 @@ def test_logic_type_is_calculation(xray):
 
 def test_manual_intervention_flags_hardcoded_inputs(xray):
     fa = assess(xray).file
-    assert fa.manual_intervention.value in {"Low", "Medium", "High"}
+    assert fa.manual_intervention.basis == "needs_human"
+    assert "Not established" in fa.manual_intervention.value
     # 66 formulas carry a hardcoded number in this fixture.
     assert any("hardcoded" in e for e in fa.manual_intervention.evidence)
 
@@ -56,7 +57,8 @@ def test_deferred_fields_carry_intended_basis(xray):
 
 def test_key_calculations_extracted(xray):
     fa = assess(xray).file
-    assert fa.key_calculations_logic.basis == "extracted"
+    assert fa.key_calculations_logic.basis == "derived"
+    assert fa.key_calculations_logic.value["summary"]
     assert fa.key_calculations_logic.value["top_functions"]
 
 
@@ -95,7 +97,7 @@ def test_assumptions_is_input_feeding_calc(xray):
 def test_calc_is_calculation_reading_assumptions(xray):
     t = _tab(xray, "Calc")
     assert t.tab_category.value == "Calculation"
-    assert "sheet: Assumptions" in t.upstream_dependencies.value
+    assert "Assumptions" in t.upstream_dependencies.value["within_workbook"]
 
 
 def test_calc_needs_validation_for_error_and_hardcodes(xray):
@@ -112,20 +114,21 @@ def test_downstream_cross_file_left_to_corpus(xray):
 # ------------------------------------------------- AI findings (Step 3)
 
 
-def test_simplification_flags_hardcodes_and_hidden_sheet(xray):
+def test_simplification_ties_hardcodes_to_activity_not_hidden_status(xray):
     fa = assess(xray).file
     sf = fa.potential_simplification
     assert sf.basis == "derived"
-    assert sf.value["verdict"] == "Yes"
+    assert sf.value["verdict"] == "Review candidates"
     ops = " ".join(sf.value["opportunities"])
-    assert "hardcoded" in ops and "hidden" in ops
+    assert "hardcoded" in ops and "Calc" in ops and "hidden" not in ops
 
 
 def test_automation_is_a_candidate(xray):
     fa = assess(xray).file
     au = fa.potential_automation
     assert au.basis == "derived"
-    assert au.value["verdict"] in {"Yes", "Possibly"}
+    assert au.value["verdict"] == "Candidate — workflow confirmation required"
+    assert au.value["steps"] and au.value["workflow_confirmation"]
     assert au.value["drivers"]
 
 
@@ -135,7 +138,7 @@ def test_retirement_defers_when_no_signal(xray):
     rt = fa.potential_retirement
     assert rt.basis in {"derived", "needs_human"}
     if rt.basis == "needs_human":
-        assert rt.value["verdict"] == "No automated retirement signal"
+        assert rt.value["verdict"] == "Not established — owner decision required"
 
 
 def test_reconciliation_absent_on_calc_model(xray):
@@ -165,7 +168,8 @@ def test_months_since_helper():
 def test_business_area_derived_from_logic(xray):
     fa = assess(xray).file
     assert fa.business_area_process.basis == "derived"
-    assert fa.business_area_process.value == "Calculation / modelling"
+    assert "Calculation / modelling" in fa.business_area_process.value
+    assert "Reporting / MI" in fa.business_area_process.value
 
 
 def test_offline_narrative_is_drafted_and_grounded(xray):

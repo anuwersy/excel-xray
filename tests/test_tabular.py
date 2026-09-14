@@ -19,9 +19,9 @@ from excel_xray.tabular import (
 def test_fmt_value_handles_shapes():
     assert fmt_value(None) == "—"
     assert fmt_value(True) == "Yes"
-    assert fmt_value(["a", "b"]) == "a; b"
+    assert fmt_value(["a", "b"]) == "a\nb"
     assert fmt_value({"verdict": "Yes", "matches": [{"file": "x.xlsx"}]}) == \
-        "Yes — matches: x.xlsx"
+        "Yes\nmatches: x.xlsx"
     assert "SUM" in fmt_value({"top_functions": ["SUM×3"], "top_formula_shapes": []})
 
 

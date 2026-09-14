@@ -15,6 +15,7 @@ from pathlib import Path
 from lxml import etree as ET
 
 from .tabular import file_rows, tab_rows
+from .review import short_source
 from .util import get_column_letter
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -185,7 +186,7 @@ def write_excel_report(wx, path, assessment):
     tabs = [[r[k] for k in ("tab", "type", "field", "value", "basis", "confidence", "evidence")]
             + [None, None] for r in tr]
     sheets, regions, formulas, warnings = [], [], [], []
-    for s in wx.sheets:
+    for s in sorted(wx.sheets, key=lambda s: (s.state != "visible", s.position)):
         sheets.append([s.name, s.state, s.populated_cells, s.max_row, s.max_col,
                        len(s.regions), s.formula_profile.get("total", 0),
                        s.formula_profile.get("distinct_skeletons", 0), s.density])
@@ -201,8 +202,10 @@ def write_excel_report(wx, path, assessment):
     metadata = [["Source file", wx.filename], ["Source path", wx.path],
                 ["SHA-256", wx.sha256], ["Parse status", wx.parse_status],
                 ["Source modified", wx.fs_modified], ["VBA present", wx.has_vba],
+                ["Hidden sheets", f"{sum(s.state != 'visible' for s in wx.sheets)} of {len(wx.sheets)} sheets are hidden"],
+                ["Cached errors", sum(len(s.error_cells) for s in wx.sheets)],
                 ["Power Query present", wx.has_power_query],
-                ["External links", "\n".join(wx.external_links)],
+                ["External links", "\n".join(short_source(x) for x in wx.external_links)],
                 ["Formula coverage", "Top 15 formula patterns per source sheet; formulas are not recalculated."],
                 ["Review", "Use Reviewer value and Reviewer notes to record amendments. Regenerating replaces these edits."],
                 ["Interpretation", "Derived scores are heuristics; drafted and inferred text require review."],
@@ -215,6 +218,23 @@ def write_excel_report(wx, path, assessment):
         ("Formula patterns", ["Source tab", "Formula pattern (text)", "Occurrences"], formulas, [28, 100, 18], ()),
         ("Warnings", ["Source tab", "Type", "Detail"], warnings, [28, 25, 100], ()),
         ("Report info", ["Field", "Value"], metadata, [28, 100], ()),
+        ("Error summary", ["Source tab", "Error type", "Count", "Area", "Region", "Example cells (first 12)", "Potential affected outputs", "Impact certainty", "Recalculation / review"],
+         [[r["tab"], r["type"], r["count"], r["area"], r["region"], ", ".join(r["cells"][:12]), ", ".join(r["potential_outputs"]) or "No output path observed", r["impact"], r["recalculation"]] for r in assessment.error_summary],
+         [28, 18, 12, 28, 20, 40, 45, 65, 75], ()),
+        ("Hidden sheet groups", ["Purpose candidate", "Group size", "Hidden tab", "Potential supported outputs", "Explanation", "Basis"],
+         [[r["purpose"], r["count"], name, ", ".join(r["supports"]) or "No output path observed", r["explanation"], r["basis"]] for r in assessment.hidden_groups for name in r["tabs"]],
+         [28, 12, 55, 55, 60, 18], ()),
+        ("Input sources", ["Business purpose candidate", "Source", "Source type", "Consumer tabs", "Association evidence", "Essentiality"],
+         [[r["purpose"], r["source"], r["source_type"], ", ".join(r["consumers"]) or "Not resolved", r["association"], r["essential"]] for r in assessment.input_groups],
+         [35, 50, 25, 55, 65, 40], ()),
+        ("Calculation steps", ["Source tab", "Observed input tabs", "Principal operation", "Potential business outputs"],
+         [[r["tab"], ", ".join(r["inputs"]) or "No cross-tab reference observed", r["operation"], ", ".join(r["potential_outputs"]) or "No output path observed"] for r in assessment.file.key_calculations_logic.value.get("steps", [])],
+         [30, 45, 100, 50], ()),
+        ("Review opportunities", ["Type", "Candidate action", "Basis"],
+         [[kind, item, fld.basis] for kind, fld, key in
+          [("Simplification", assessment.file.potential_simplification, "opportunities"),
+           ("Automation", assessment.file.potential_automation, "steps")]
+          for item in fld.value.get(key, [])], [25, 100, 18], ()),
     ], [wx.path])
 
 

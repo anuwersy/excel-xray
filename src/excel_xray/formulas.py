@@ -63,6 +63,7 @@ class FormulaFacts:
     cross_sheet_refs: int = 0
     external_refs: int = 0
     referenced_sheets: set[str] = field(default_factory=set)
+    external_indices: set[int] = field(default_factory=set)
     # (row, col) cells this formula reads, local sheet only -- feeds the
     # dependency graph in stage 4.
     precedent_cells: list[tuple[int, int]] = field(default_factory=list)
@@ -127,8 +128,11 @@ def analyse(formula: str, row: int, col: int) -> FormulaFacts:
         r = int(m.group("row"))
         cabs, rabs = bool(m.group("cabs")), bool(m.group("rabs"))
 
-        if ext:
+        # Quoted external refs put [n] inside the sheet prefix: '[1]Data'!A1.
+        quoted_index = re.match(r"'\[(\d+)\]", sheet or "")
+        if ext or quoted_index:
             facts.external_refs += 1
+            facts.external_indices.add(int(ext[1:-1]) if ext else int(quoted_index.group(1)))
             scope = "EXT!"
         elif sheet:
             facts.cross_sheet_refs += 1
@@ -196,6 +200,7 @@ class FormulaProfile:
     cross_sheet_count: int = 0
     external_count: int = 0
     referenced_sheets: Counter = field(default_factory=Counter)
+    external_indices: Counter = field(default_factory=Counter)
     hardcoded_literal_count: int = 0
 
     @property
@@ -217,6 +222,8 @@ class FormulaProfile:
         self.external_count += int(facts.external_refs > 0)
         for s in facts.referenced_sheets:
             self.referenced_sheets[s] += 1
+        for index in facts.external_indices:
+            self.external_indices[index] += 1
         self.hardcoded_literal_count += int(facts.has_literal_number)
 
     def top(self, n: int = 15) -> list[tuple[str, int]]:

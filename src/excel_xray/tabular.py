@@ -33,6 +33,7 @@ FILE_FIELDS = [
     ("Key AI Finding / Observation", "potential_automation", "Potential Automation"),
     ("Key AI Finding / Observation", "potential_retirement", "Potential Retirement"),
     ("Workbook logic / Automation", "logic_type", "Logic Type"),
+    ("Workbook logic / Automation", "logic_types", "All Detected Logic Types"),
     ("Workbook logic / Automation", "key_calculations_logic", "Key calculations / logic"),
     ("Workbook logic / Automation", "reconciliation_logic", "Reconciliation logic"),
     ("Workbook logic / Automation", "manual_intervention", "Manual intervention"),
@@ -41,7 +42,9 @@ FILE_FIELDS = [
 
 TAB_FIELDS = [
     ("Fact Assessment", "tab_name", "Tab Name"),
+    ("Fact Assessment", "tab_visibility", "Tab Visibility"),
     ("Fact Assessment", "tab_category", "Tab Category"),
+    ("Fact Assessment", "tab_roles", "All Detected Tab Roles"),
     ("Fact Assessment", "tab_purpose_description", "Tab Purpose / Description"),
     ("Fact Assessment", "tab_information_analysis", "Tab Information Analysis"),
     ("Fact Assessment", "key_calculation_transformation_logic",
@@ -62,17 +65,47 @@ def fmt_value(v) -> str:
     if isinstance(v, (int, float, str)):
         return str(v)
     if isinstance(v, list):
-        return "; ".join(fmt_value(x) for x in v) if v else "—"
+        if v and all(isinstance(x, dict) and "source_type" in x for x in v):
+            groups = {}
+            for item in v:
+                groups.setdefault(item["purpose"], []).append(item["source"])
+            return "\n".join(f"{purpose}: {', '.join(names[:5])}"
+                             + (f" (+{len(names)-5} more)" if len(names) > 5 else "")
+                             for purpose, names in groups.items()) + "\nSee Input sources for providers, consumer tabs and essentiality questions."
+        return "\n".join(fmt_value(x) for x in v) if v else "—"
     if isinstance(v, dict):
+        if "purpose" in v and "source_type" in v:
+            return (f"{v['purpose']} — {v['source']} ({v['source_type']}); "
+                    f"used by: {', '.join(v['consumers']) or 'not resolved'}; "
+                    f"{v['association']}; essential: {v['essential']}")
+        if "within_workbook" in v:
+            return ("Within workbook: " + (", ".join(v["within_workbook"]) or "none observed")
+                    + "\nExternal files: " + (", ".join(v["external_files"]) or "none resolved")
+                    + ("\nExternal references exist but their targets were not resolved." if v["unresolved_external"] else "")
+                    + "\n" + v["scope"])
+        if "reconciliations" in v:
+            return "\n".join(
+                f"{r['tab']}: source candidates: {', '.join(r['sources']) or 'not resolved'}; "
+                f"target: {r['comparison_target']}; key candidates: {', '.join(r['matching_key_candidates']) or 'not established'}; "
+                f"{r['matching_key_status']}; tolerance: {r['tolerance']}; use: {r['result_use']}"
+                for r in v["reconciliations"])
+        if "summary" in v:
+            return str(v["summary"])
         if "verdict" in v:
             extras = []
-            for k in ("matches", "candidates", "opportunities", "drivers", "signals"):
+            for k in ("matches", "candidates", "opportunities", "drivers", "signals", "steps", "against"):
                 items = v.get(k)
                 if items:
-                    vals = [x.get("file") if isinstance(x, dict) else str(x) for x in items]
-                    extras.append(f"{k}: " + ", ".join(vals))
+                    vals = [str(x.get("file", x)) if isinstance(x, dict) else str(x) for x in items]
+                    shown = vals[:5] if k in ("opportunities", "steps") else vals
+                    extras.append(f"{k}: " + "\n".join(shown))
+                    if len(shown) < len(vals):
+                        extras.append(f"{len(vals)-len(shown)} further candidates; see Review opportunities for the full list.")
+            for k in ("confirmation", "workflow_confirmation"):
+                if v.get(k):
+                    extras.append(str(v[k]))
             s = str(v["verdict"])
-            return s + (" — " + "; ".join(extras) if extras else "")
+            return s + ("\n" + "\n".join(extras) if extras else "")
         if "top_functions" in v:
             fns = ", ".join(v.get("top_functions", []))
             shapes = "; ".join(v.get("top_formula_shapes", [])[:3])

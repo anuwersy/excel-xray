@@ -170,9 +170,16 @@ def xray_workbook(path: str, max_rows: int = 200_000) -> WorkbookXray:
                 wx.parse_status = "partial"
                 continue
             sstruct = struct.structures.get(sref.name)
-            wx.sheets.append(
-                _xray_sheet(zf, sref, sstruct, shared, styles, max_rows)
-            )
+            sheet = _xray_sheet(zf, sref, sstruct, shared, styles, max_rows)
+            indices = sheet.formula_profile.get("external_indices", [])
+            sheet.formula_profile["external_sources"] = sorted({
+                struct.external_link_targets[i] for i in indices if i in struct.external_link_targets
+            })
+            sheet.formula_profile["unresolved_external_indices"] = sorted(
+                i for i in indices if i not in struct.external_link_targets)
+            wx.sheets.append(sheet)
+            if any(n.startswith("row scan capped") for n in sheet.notes):
+                wx.parse_status = "partial"
 
     if all(s.populated_cells == 0 for s in wx.sheets) and wx.sheets:
         wx.parse_status = "partial"
@@ -232,6 +239,7 @@ def _xray_sheet(zf, sref, sstruct, shared, styles, max_rows: int) -> SheetXray:
             "external_count": profile.external_count,
             "hardcoded_literal_count": profile.hardcoded_literal_count,
             "referenced_sheets": dict(profile.referenced_sheets),
+            "external_indices": sorted(profile.external_indices),
             "top_functions": profile.functions.most_common(12),
             "top_skeletons": profile.top(15),
         },

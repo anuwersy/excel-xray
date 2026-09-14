@@ -70,6 +70,7 @@ class WorkbookStructure:
     structures: dict[str, SheetStructure] = field(default_factory=dict)
     defined_names: list[tuple[str, str]] = field(default_factory=list)
     external_links: list[str] = field(default_factory=list)
+    external_link_targets: dict[int, str] = field(default_factory=dict)
     connections: list[dict] = field(default_factory=list)
     pivot_cache_sources: list[str] = field(default_factory=list)
     has_vba: bool = False
@@ -154,12 +155,17 @@ def read_structure(path: str) -> WorkbookStructure:
         for dn in wb_root.findall(".//m:definedNames/m:definedName", ns):
             ws.defined_names.append((dn.get("name", ""), (dn.text or "").strip()))
 
-        for rid, target in wb_rels.items():
-            if "externalLink" in target:
-                ext_rels = _rels_for(zf, target)
-                for t in ext_rels.values():
-                    if t.startswith(("http", "file:", "/", "\\")) or ":" in t[:3]:
-                        ws.external_links.append(t)
+        # Formula [n] indexes follow workbook externalReferences order, not
+        # relationship IDs or the order of .rels entries.
+        for index, ref in enumerate(wb_root.findall("m:externalReferences/m:externalReference", ns), 1):
+            part = wb_rels.get(ref.get(R_ID), "")
+            root = _parse(zf, part) if part else None
+            book = root.find("m:externalBook", ns) if root is not None else None
+            if book is not None:
+                target = _rels_for(zf, part).get(book.get(R_ID))
+                if target:
+                    ws.external_link_targets[index] = target
+                    ws.external_links.append(target)
 
         _read_connections(zf, ws, ns)
         _read_pivot_caches(zf, ws, names, ns)

@@ -70,7 +70,8 @@ def test_single_file_corpus_defers_gracefully():
     a.file.potential_consolidation = _Fld()
     fp = _fp("only.xlsx", ["RC[-1]*N"], ["x"])
     _apply_corpus(a, fp, [])
-    assert a.file.potential_duplication.value["verdict"] == "No"
+    assert a.file.potential_duplication.value is None
+    assert a.file.potential_duplication.basis == "needs_corpus"
     assert "only one workbook" in a.file.potential_duplication.evidence[0]
 
 

@@ -227,6 +227,35 @@ def _render_assessment(assessment) -> str:
     return "".join(parts)
 
 
+def _render_review_details(assessment):
+    """Business-facing summaries share the same evidence as the Excel report."""
+    sections = [
+        ("Error summary", ["Tab", "Type", "Count", "Area / region", "Potential outputs", "Impact / action"],
+         [[r["tab"], r["type"], r["count"], r["area"] + " / " + r["region"], ", ".join(r["potential_outputs"]) or "Not resolved", r["impact"] + ". " + r["recalculation"]] for r in assessment.error_summary]),
+        ("Hidden sheet groups", ["Purpose candidate", "Count", "Tabs", "Supports", "Explanation"],
+         [[r["purpose"], r["count"], ", ".join(r["tabs"]), ", ".join(r["supports"]) or "No output path observed", r["explanation"]] for r in assessment.hidden_groups]),
+        ("Input sources", ["Business purpose candidate", "Source", "Type", "Consumer tabs", "Association / essentiality"],
+         [[r["purpose"], r["source"], r["source_type"], ", ".join(r["consumers"]) or "Not resolved", r["association"] + "; " + r["essential"]] for r in assessment.input_groups]),
+        ("Calculation steps", ["Tab", "Observed inputs", "Principal operation", "Potential business outputs"],
+         [[r["tab"], ", ".join(r["inputs"]), r["operation"], ", ".join(r["potential_outputs"])] for r in assessment.file.key_calculations_logic.value.get("steps", [])]),
+        ("Review opportunities", ["Type", "Candidate action", "Basis"],
+         [[kind, item, fld.basis] for kind, fld, key in
+          [("Simplification", assessment.file.potential_simplification, "opportunities"),
+           ("Automation", assessment.file.potential_automation, "steps")]
+          for item in fld.value.get(key, [])]),
+    ]
+    parts = []
+    for title, headers, rows in sections:
+        if not rows:
+            continue
+        parts.append(f"<section class='assess'><h3>{_esc(title)}</h3><div class='scroll'><table class='euc'><tr>")
+        parts.append("".join(f"<th>{_esc(h)}</th>" for h in headers) + "</tr>")
+        for row in rows:
+            parts.append("<tr>" + "".join(f"<td>{_esc(str(v))}</td>" for v in row) + "</tr>")
+        parts.append("</table></div></section>")
+    return "".join(parts)
+
+
 def build_report(wx: WorkbookXray, assessment=None) -> str:
     total_regions = sum(len(s.regions) for s in wx.sheets)
     total_formulas = sum(s.formula_profile.get("total", 0) for s in wx.sheets)
@@ -257,7 +286,9 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
         (f"{total_formulas:,}", "formula cells"),
         (distinct, "distinct formulas"),
         (f"{(total_formulas/distinct):.0f}x" if distinct else "&ndash;", "compression"),
-        (len(low_conf), "need review"),
+        (sum(t.human_validation_required.value == "Y" for t in assessment.tabs)
+         if assessment is not None else len(low_conf),
+         "tabs need review" if assessment is not None else "uncertain regions"),
     ]:
         A(f"<div class='vital'><b>{val}</b><span>{label}</span></div>")
     A("</div></header>")
@@ -265,17 +296,22 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
     for w in wx.warnings:
         A(f"<div class='warn'>{_esc(w)}</div>")
     if errors:
-        A(f"<div class='warn'><b>{len(errors)} cached error cell(s):</b> "
-          f"<span class='mono'>{_esc(', '.join(errors[:12]))}</span></div>")
+        from collections import Counter
+        kinds = Counter(e.rsplit(" ", 1)[-1] for e in errors)
+        counts = ", ".join(f"{k}: {n}" for k, n in sorted(kinds.items()))
+        A(f"<div class='warn'><b>{len(errors)} cached error cell(s):</b> {_esc(counts)}. "
+          "Recalculate in Excel with refreshed sources to confirm current errors. "
+          "Potential business impact is based on sheet dependencies, not proven cell-level propagation.</div>")
     if hidden:
-        A(f"<div class='warn'>Hidden sheet(s): <span class='mono'>"
-          f"{_esc(', '.join(hidden))}</span>. Hidden sheets often hold the working "
-          f"logic a report depends on &mdash; check before consolidating.</div>")
+        A(f"<div class='warn'><b>{len(hidden)} of {len(wx.sheets)} sheets are hidden.</b> "
+          + ("Purpose groups and potentially supported outputs are listed below. " if assessment is not None else "")
+          + "Hidden status is not evidence of disuse.</div>")
 
     if assessment is not None:
+        A(_render_review_details(assessment))
         A(_render_assessment(assessment))
 
-    for s in wx.sheets:
+    for s in sorted(wx.sheets, key=lambda s: (s.state != "visible", s.position)):
         fp = s.formula_profile
         plate = {
             "rows": s.max_row, "cols": s.max_col, "cells": s.occupancy,

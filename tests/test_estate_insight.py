@@ -23,7 +23,8 @@ def test_offline_insight_recommends_consolidation(xray):
     assert len(ins.families) == 1
     fam = ins.families[0]
     assert fam.basis == "drafted"
-    assert "consolidate" in fam.recommended_action.lower()
+    assert "consolidation" in fam.recommended_action.lower()
+    assert "confirm" in fam.recommended_action.lower()
     assert fam.summary and fam.rationale
 
 

@@ -95,9 +95,9 @@ def _apply_corpus(assessment, fp: Fingerprint, others: list[Fingerprint]) -> Non
 
     if not others:
         note = "only one workbook in the corpus — no comparison possible"
-        fa.potential_duplication = Field.derived({"verdict": "No", "matches": []}, 0.4, [note])
-        fa.similar_duplicate_files = Field.derived([], 0.4, [note])
-        fa.potential_consolidation = Field.derived({"verdict": "No"}, 0.4, [note])
+        fa.potential_duplication = Field.pending("needs_corpus", note)
+        fa.similar_duplicate_files = Field.pending("needs_corpus", note)
+        fa.potential_consolidation = Field.pending("needs_corpus", note)
         return
 
     scored = sorted(
@@ -123,7 +123,8 @@ def _apply_corpus(assessment, fp: Fingerprint, others: list[Fingerprint]) -> Non
     fa.potential_duplication = Field.derived(
         {"verdict": "Yes" if dups else "No", "matches": dups},
         0.6 + (0.2 if dups else 0.0),
-        [f"{len(dups)} match(es) at/above duplication threshold {DUP_THRESHOLD}"],
+        [f"{len(others)} other workbook(s) compared; {len(dups)} candidate match(es) at/above duplication threshold {DUP_THRESHOLD}",
+         "Coverage is limited to the supplied files; structural similarity does not establish identical outputs or retirement suitability"],
     )
 
     # Consolidation: related workbooks sharing the same logic type. Exact
@@ -139,7 +140,8 @@ def _apply_corpus(assessment, fp: Fingerprint, others: list[Fingerprint]) -> Non
     fa.potential_consolidation = Field.derived(
         {"verdict": verdict, "candidates": [m["file"] for m in consol]},
         0.55,
-        [f"{len(consol)} candidate(s) share logic type '{fp.logic_type}'"],
+        [f"{len(others)} other workbook(s) compared; {len(consol)} candidate(s) share logic type '{fp.logic_type}'",
+         "Confirm process scope, owners, output equivalence and downstream users before consolidation"],
     )
 
 
