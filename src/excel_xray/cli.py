@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import os
 import sys
+import time
 import traceback
 
 import json
@@ -26,6 +27,33 @@ from .scan import UnreadableWorkbook, to_json, xray_workbook
 
 EXTS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 SKIP_PREFIX = ("~$", ".")
+
+
+def _narrative_assessor(args):
+    """Build the --llm narrative assessor for the chosen --provider, or None."""
+    if not args.llm:
+        return None
+    max_tokens = int(os.environ.get("LLM_MAX_TOKENS") or 2000)
+    if args.provider == "openai":
+        from .narrative import OpenAIAssessor
+        return OpenAIAssessor(model=args.model, max_tokens=max_tokens,
+                               azure_endpoint=args.azure_endpoint,
+                               api_version=args.api_version)
+    from .narrative import ClaudeAssessor
+    return ClaudeAssessor(model=args.model, max_tokens=max_tokens)
+
+
+def _estate_assessor(args):
+    """Build the --llm estate-insight assessor for the chosen --provider, or None."""
+    if not args.llm:
+        return None
+    if args.provider == "openai":
+        from .estate_insight import OpenAIEstateAssessor
+        return OpenAIEstateAssessor(model=args.model,
+                                     azure_endpoint=args.azure_endpoint,
+                                     api_version=args.api_version)
+    from .estate_insight import ClaudeEstateAssessor
+    return ClaudeEstateAssessor(model=args.model)
 
 
 def collect(target: str) -> list[str]:
@@ -56,11 +84,27 @@ def main() -> int:
     output_mode.add_argument("--assess", action="store_true",
                     help="emit the EUC assessment JSON to stdout")
     ap.add_argument("--llm", action="store_true",
-                    help="use the Claude assessor for narrative fields "
-                         "(needs the 'anthropic' package + a credential)")
+                    help="use a model assessor for narrative fields "
+                         "(needs a credential for the chosen --provider)")
+    ap.add_argument("--provider", choices=["claude", "openai"], default=None,
+                    help="LLM backend for --llm: 'claude' (Anthropic, needs the "
+                         "'anthropic' package) or 'openai' (GPT via the public "
+                         "OpenAI API, or an Azure OpenAI deployment if "
+                         "--azure-endpoint/$AZURE_OPENAI_ENDPOINT is set; needs "
+                         "the 'openai' package). Default: claude, unless an "
+                         "Azure endpoint is given, which implies openai.")
     ap.add_argument("--model", default=None,
-                    help="model id for --llm (default: $ANTHROPIC_MODEL "
-                         "from the environment / .env, else claude-opus-5)")
+                    help="model id for --llm. Claude default: $ANTHROPIC_MODEL "
+                         "or claude-opus-5. OpenAI default: $OPENAI_MODEL or "
+                         "gpt-4o; on Azure this is the deployment name "
+                         "(else $AZURE_OPENAI_DEPLOYMENT).")
+    ap.add_argument("--azure-endpoint", default=None,
+                    help="Azure OpenAI resource endpoint, e.g. "
+                         "https://<resource>.openai.azure.com "
+                         "(else $AZURE_OPENAI_ENDPOINT). Implies --provider openai.")
+    ap.add_argument("--api-version", default=None,
+                    help="Azure OpenAI api-version (else $AZURE_OPENAI_API_VERSION, "
+                         "default 2024-10-21)")
     ap.add_argument("--csv", default=None, metavar="PATH",
                     help="also write the EUC assessment as a CSV table")
     ap.add_argument("--estate", action="store_true",
@@ -72,17 +116,27 @@ def main() -> int:
         ap.error("--json cannot be combined with --csv or --estate; use --assess instead")
 
     if args.llm:
-        # Load a local .env so ANTHROPIC_API_KEY can live there. Best-effort:
-        # python-dotenv ships with the [llm] extra, so this is a no-op otherwise.
+        # Load a local .env so ANTHROPIC_API_KEY / OPENAI_API_KEY /
+        # AZURE_OPENAI_* can live there. Best-effort: python-dotenv ships
+        # with the [llm] extra, so this is a no-op otherwise.
         try:
             from dotenv import load_dotenv
             load_dotenv()
         except ImportError:
             pass
 
+    args.azure_endpoint = args.azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+    args.api_version = args.api_version or os.environ.get("AZURE_OPENAI_API_VERSION")
+    # An Azure endpoint only makes sense for the openai provider.
+    args.provider = args.provider or ("openai" if args.azure_endpoint else "claude")
+
     # Resolve model / token budget: explicit flag wins, then the environment
-    # (ANTHROPIC_MODEL / LLM_MAX_TOKENS, loaded from .env above), then defaults.
-    args.model = args.model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5"
+    # (loaded from .env above), then a per-provider default.
+    if args.provider == "openai":
+        args.model = (args.model or os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+                      or os.environ.get("OPENAI_MODEL") or "gpt-4o")
+    else:
+        args.model = args.model or os.environ.get("ANTHROPIC_MODEL") or "claude-opus-5"
 
     paths = collect(args.target)
     if not paths:
@@ -96,25 +150,32 @@ def main() -> int:
     ok = partial = failed = 0
     reasons: dict[str, list[str]] = {}
     batch: list = []  # (path, wx) for assessment-aware output modes
+    timings: dict[str, float] = {}  # path -> extraction seconds, for the report line below
     for p in paths:
+        t0 = time.perf_counter()
         try:
             wx = xray_workbook(p, max_rows=args.max_rows)
         except UnreadableWorkbook as e:
+            elapsed = time.perf_counter() - t0
             failed += 1
             reasons.setdefault(e.category, []).append(os.path.basename(p))
-            print(f"SKIPPED  {os.path.basename(p):46} {e}", file=sys.stderr)
+            print(f"SKIPPED  {os.path.basename(p):46} {e}  ({elapsed:.2f}s)", file=sys.stderr)
             continue
         except Exception as e:  # noqa: BLE001 - report and keep going over a corpus
+            elapsed = time.perf_counter() - t0
             failed += 1
             reasons.setdefault("unexpected", []).append(os.path.basename(p))
-            print(f"FAILED   {os.path.basename(p):46} {type(e).__name__}: {e}",
-                  file=sys.stderr)
+            print(f"FAILED   {os.path.basename(p):46} {type(e).__name__}: {e}  "
+                  f"({elapsed:.2f}s)", file=sys.stderr)
             if os.environ.get("XRAY_DEBUG"):
                 traceback.print_exc()
             continue
+        elapsed = time.perf_counter() - t0
+        timings[p] = elapsed
 
         ok += wx.parse_status == "full"
         partial += wx.parse_status == "partial"
+        print(f"EXTRACT  {os.path.basename(p):46} {elapsed:6.2f}s", file=sys.stderr)
         if args.json:  # raw scan, no assessment
             print(to_json(wx))
         else:
@@ -124,11 +185,7 @@ def main() -> int:
     # duplication/consolidation see the whole set.
     assessments = None
     if batch and (args.assess or args.csv or args.estate or not args.json):
-        assessor = None
-        if args.llm:
-            from .narrative import ClaudeAssessor
-            max_tokens = int(os.environ.get("LLM_MAX_TOKENS") or 2000)
-            assessor = ClaudeAssessor(model=args.model, max_tokens=max_tokens)
+        assessor = _narrative_assessor(args)
         wxs = [wx for _, wx in batch]
         if len(wxs) > 1:
             from .corpus import assess_corpus
@@ -159,7 +216,7 @@ def main() -> int:
                       if r.detect_confidence < 0.70)
             print(f"{wx.parse_status:8} {os.path.basename(p):46} "
                   f"{len(wx.sheets):3} sheets  {regions:3} regions  "
-                  f"{low:2} low-conf  -> {dest}")
+                  f"{low:2} low-conf  {timings.get(p, 0):5.2f}s  -> {dest}")
 
     if args.csv and assessments is not None:
         from .tabular import to_csv
@@ -176,10 +233,7 @@ def main() -> int:
             from .estate_report import write_estate_csv, write_estate_report
             pairs_in = [(wx, a) for (_, wx), a in zip(batch, assessments)]
             estate = build_estate(pairs_in)
-            insight_assessor = None
-            if args.llm:
-                from .estate_insight import ClaudeEstateAssessor
-                insight_assessor = ClaudeEstateAssessor(model=args.model)
+            insight_assessor = _estate_assessor(args)
             insight = generate_estate_insight(estate, insight_assessor)
             html_path = os.path.join(outdir, "estate.html")
             csv_path = os.path.join(outdir, "estate_pairs.csv")

@@ -128,10 +128,10 @@ Layers, deliberately separated.
 | [scan.py](src/excel_xray/scan.py) | Triage, orchestration, occupancy plate |
 | [assessment.py](src/excel_xray/assessment.py) | Evidence → EUC schema: complexity, logic type, tab categories, dependencies, human-validation, heuristic findings |
 | [review.py](src/excel_xray/review.py) | Business-role rules, grouped input sources, potential error impact and targeted reviewer questions |
-| [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default) or Claude (`--llm`) |
+| [narrative.py](src/excel_xray/narrative.py) | Narrative fields behind an `Assessor` interface: offline template (default), Claude, OpenAI, or Azure OpenAI (`--llm`) |
 | [corpus.py](src/excel_xray/corpus.py) | Per-file duplication/consolidation fields (formula shapes + headers) |
 | [estate.py](src/excel_xray/estate.py) | Estate comparison: four-signal fingerprints, relationship typing, clustering |
-| [estate_insight.py](src/excel_xray/estate_insight.py) | Interprets families → recommendations (offline template or Claude) |
+| [estate_insight.py](src/excel_xray/estate_insight.py) | Interprets families → recommendations (offline template, Claude, OpenAI, or Azure OpenAI) |
 | [estate_report.py](src/excel_xray/estate_report.py) | Standalone estate HTML + pairs CSV |
 | [tabular.py](src/excel_xray/tabular.py) | The review-table schema; drives the HTML tables and the CSV export |
 | [report.py](src/excel_xray/report.py) | Self-contained HTML — no CDN, no network |
@@ -176,13 +176,17 @@ for t in a.tabs:
 
 Purpose, Key Output/Outcome, Key Outputs and each tab's Purpose are written by an
 `Assessor`. The default is offline (network-free, `drafted`). Pass `--llm` to use
-Claude instead (`inferred`); this needs the optional `anthropic` package and a
-credential:
+Claude (`inferred`), or select OpenAI with `--provider openai`. Install the
+optional model clients and provide the credential for the chosen provider:
 
 ```bash
 uv sync --extra llm
 ANTHROPIC_API_KEY=sk-ant-... uv run excel-xray file.xlsx --assess --llm
+OPENAI_API_KEY=sk-... uv run excel-xray file.xlsx --assess --llm --provider openai
 ```
+
+Azure OpenAI is also supported: pass `--provider openai --azure-endpoint URL`
+and set `AZURE_OPENAI_API_KEY`; use `--model` for the Azure deployment name.
 
 Or put the key in a `.env` file (copy [.env.example](.env.example) to `.env`) —
 with `--llm` the CLI loads it automatically. `.env` is git-ignored, so the key is
@@ -214,8 +218,9 @@ the per-signal breakdown for each pair.
 (reproducible and auditable). On top of them an *insight* layer interprets each
 family — what it is, and a recommended action (consolidate / keep one / extract
 shared logic / align source) — plus a ranked estate-level opportunities list. It
-runs offline by default (basis `drafted`) and upgrades to Claude with `--llm`
-(basis `inferred`); only fingerprint metadata is sent, never cell values.
+runs offline by default (basis `drafted`) and upgrades to the selected Claude,
+OpenAI, or Azure OpenAI provider with `--llm` (basis `inferred`); only
+fingerprint metadata is sent, never cell values.
 
 ```python
 from excel_xray import xray_workbook, assess, build_estate

@@ -11,14 +11,17 @@ they sit behind a small :class:`Assessor` interface with two implementations:
 * :class:`ClaudeAssessor` — opt-in. Sends the *structural* evidence bundle (no
   cell values — same privacy stance as the report) to the Anthropic API and
   returns a considered narrative (basis ``inferred``).
+* :class:`OpenAIAssessor` — opt-in. Same evidence bundle, sent to either the
+  public OpenAI API or an Azure OpenAI deployment (basis ``inferred``).
 
 Only structural metadata, headers and normalised formula shapes leave the
-machine when the Claude assessor is used — never cell values.
+machine when a model-backed assessor is used — never cell values.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -179,7 +182,7 @@ class OfflineAssessor:
 
 
 _SYSTEM = (
-    "You review End-User Computing (EUC) spreadsheets for a financial-controls "
+    "You review End User spreadsheets for a financial-controls "
     "team. You are given a value-free structural summary of one workbook "
     "(sheet layout, tab categories, column headers, normalised formula shapes — "
     "never cell values). Write concise, factual assessment prose. Do not invent "
@@ -234,6 +237,77 @@ class ClaudeAssessor:
         )
         text = "".join(b.text for b in msg.content if b.type == "text")
         data = _parse_json(text)
+        return Narrative(
+            purpose_of_file=data.get("purpose_of_file"),
+            key_output_outcome=data.get("key_output_outcome"),
+            key_outputs=data.get("key_outputs"),
+            tabs=data.get("tabs") or {},
+        )
+
+
+# --------------------------------------------------------- openai / azure assessor
+
+
+def _openai_complete(model: str, max_tokens: int, system: str, user: str, *,
+                      azure_endpoint: str | None, api_version: str | None) -> dict:
+    """Call an OpenAI-compatible chat endpoint and return the parsed JSON reply.
+
+    Shared by :class:`OpenAIAssessor` and estate_insight's ``OpenAIEstateAssessor``
+    so the public-API/Azure client selection lives in one place. ``model`` is
+    the model id for the public API, or the deployment name for an Azure
+    endpoint (Azure addresses models by the name the resource deployed them
+    under, not the base model id).
+    """
+    try:
+        from openai import AzureOpenAI, OpenAI
+    except ImportError as e:
+        raise RuntimeError(
+            "the OpenAI assessor needs the 'openai' package — "
+            "install it with: uv add --optional llm openai"
+        ) from e
+
+    if azure_endpoint:
+        # api key picked up from AZURE_OPENAI_API_KEY by the client itself.
+        client = AzureOpenAI(azure_endpoint=azure_endpoint,
+                              api_version=api_version or "2024-10-21")
+    else:
+        client = OpenAI()  # picks up OPENAI_API_KEY
+
+    resp = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+    )
+    text = resp.choices[0].message.content or ""
+    return _parse_json(text)
+
+
+class OpenAIAssessor:
+    """Opt-in GPT-backed assessor. Talks to the public OpenAI API by default;
+    pass `azure_endpoint` (or set $AZURE_OPENAI_ENDPOINT) to talk to an Azure
+    OpenAI deployment instead — `model` then means that deployment's name.
+    Requires the `openai` package and a credential:
+      - public API: OPENAI_API_KEY
+      - Azure:      AZURE_OPENAI_API_KEY (+ the endpoint above)."""
+
+    basis = "inferred"
+
+    def __init__(self, model: str = "gpt-4o", max_tokens: int = 2000,
+                 azure_endpoint: str | None = None, api_version: str | None = None):
+        self.model = model
+        self.max_tokens = max_tokens
+        self.azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        self.api_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION")
+        self.label = (f"Azure OpenAI ({model})" if self.azure_endpoint
+                      else f"OpenAI ({model})")
+
+    def narrate(self, bundle: dict) -> Narrative:
+        data = _openai_complete(
+            self.model, self.max_tokens, _SYSTEM,
+            _INSTRUCTION + json.dumps(bundle, default=str),
+            azure_endpoint=self.azure_endpoint, api_version=self.api_version,
+        )
         return Narrative(
             purpose_of_file=data.get("purpose_of_file"),
             key_output_outcome=data.get("key_output_outcome"),

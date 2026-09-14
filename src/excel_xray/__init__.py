@@ -15,12 +15,13 @@ from .estate import EstateResult, build_estate, compare, fingerprint_euc
 from .estate_insight import (
     ClaudeEstateAssessor,
     EstateInsight,
+    OpenAIEstateAssessor,
     OfflineEstateAssessor,
     generate_estate_insight,
 )
 from .estate_report import build_estate_report, write_estate_csv, write_estate_report
 from .excel_report import write_excel_report, write_estate_excel_report
-from .narrative import ClaudeAssessor, Narrative, OfflineAssessor
+from .narrative import ClaudeAssessor, Narrative, OfflineAssessor, OpenAIAssessor
 from .ooxml import WorkbookStructure, read_structure
 from .report import build_report, write_report
 from .scan import (
@@ -51,6 +52,7 @@ __all__ = [
     "TabAssessment",
     "OfflineAssessor",
     "ClaudeAssessor",
+    "OpenAIAssessor",
     "Narrative",
     "assess_corpus",
     "fingerprint",
@@ -67,6 +69,7 @@ __all__ = [
     "EstateInsight",
     "OfflineEstateAssessor",
     "ClaudeEstateAssessor",
+    "OpenAIEstateAssessor",
     "main",
 ]
 

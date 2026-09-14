@@ -6,7 +6,8 @@ the judgement the numbers can't express: what each family of related EUCs is, an
 what to do about it (consolidate / keep one / extract shared logic / align source).
 
 Same shape as the file-level narrative: an ``EstateAssessor`` interface with an
-offline template (basis ``drafted``) and an opt-in Claude implementation (basis
+offline template (basis ``drafted``) and opt-in model-backed implementations —
+Claude, or GPT via the public OpenAI API / an Azure OpenAI deployment (basis
 ``inferred``). Only fingerprint metadata — file names, headers, relationship
 types, scores — is sent to the model; never cell values.
 """
@@ -14,6 +15,7 @@ types, scores — is sent to the model; never cell values.
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -184,6 +186,49 @@ class ClaudeEstateAssessor:
         )
         text = "".join(b.text for b in msg.content if b.type == "text")
         data = _parse_json(text)
+        fam_out = data.get("families") or []
+        families = []
+        for i in range(len(bundle["families"])):
+            f = fam_out[i] if i < len(fam_out) else {}
+            families.append(FamilyInsight(
+                summary=f.get("summary", ""),
+                recommended_action=f.get("recommended_action", ""),
+                rationale=f.get("rationale", ""), basis="inferred",
+            ))
+        return EstateInsight(
+            families=families,
+            estate_summary=data.get("estate_summary", ""),
+            top_opportunities=data.get("top_opportunities") or [],
+            basis="inferred",
+        )
+
+
+# --------------------------------------------------------- openai / azure assessor
+
+
+class OpenAIEstateAssessor:
+    """Opt-in GPT-backed estate insight. Same client selection as
+    :class:`narrative.OpenAIAssessor` — public OpenAI API by default, or an
+    Azure OpenAI deployment when given (or found via env) an endpoint."""
+
+    basis = "inferred"
+
+    def __init__(self, model: str = "gpt-4o", max_tokens: int = 2000,
+                 azure_endpoint: str | None = None, api_version: str | None = None):
+        self.model = model
+        self.max_tokens = max_tokens
+        self.azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        self.api_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION")
+        self.label = (f"Azure OpenAI ({model})" if self.azure_endpoint
+                      else f"OpenAI ({model})")
+
+    def insight(self, bundle: dict) -> EstateInsight:
+        from .narrative import _openai_complete
+        data = _openai_complete(
+            self.model, self.max_tokens, _SYSTEM,
+            _INSTRUCTION + json.dumps(bundle, default=str),
+            azure_endpoint=self.azure_endpoint, api_version=self.api_version,
+        )
         fam_out = data.get("families") or []
         families = []
         for i in range(len(bundle["families"])):

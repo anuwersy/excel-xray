@@ -57,6 +57,24 @@ def test_report_embeds_assessment(xray):
     assert "Tab level details" in html
 
 
+def test_report_has_tabbed_navigation_and_review_controls(xray):
+    html = build_report(xray, assess(xray))
+    assert "class='tabbar'" in html
+    assert "data-target='tab-assessment'>Assessment" in html
+    assert html.count("class='tabbtn'") == len(xray.sheets) + 1
+    assert "class='tabpanel' id='tab-assessment'" in html
+    assert "Filter rows…" in html
+    assert "Filter tabs…" in html
+    assert "class='cellv trunc'" in html
+    assert "Error summary" in html
+
+    visible = [s for s in xray.sheets if s.state == "visible"]
+    hidden = [s for s in xray.sheets if s.state != "visible"]
+    if visible and hidden:
+        assert html.index(f">{visible[-1].name}<span class='tct'>") < \
+            html.index(f">{hidden[0].name}<span class='tct'>")
+
+
 def test_report_without_assessment_still_renders(xray):
     html = build_report(xray)  # assessment optional
     assert "EUC assessment" not in html
