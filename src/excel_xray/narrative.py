@@ -25,6 +25,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from . import review
+
 
 @dataclass
 class Narrative:
@@ -33,6 +35,8 @@ class Narrative:
     purpose_of_file: str | None = None
     key_output_outcome: str | None = None
     key_outputs: list | None = None
+    process: str | None = None
+    sub_process: str | None = None
     tabs: dict[str, str] = field(default_factory=dict)  # tab name -> purpose
 
 
@@ -82,11 +86,13 @@ def build_bundle(assessment, wx) -> dict:
             "downstream": ta.downstream_dependencies.value.get("in_workbook")
             if isinstance(ta.downstream_dependencies.value, dict) else None,
             "hidden": (s.state != "visible") if s else False,
+            "final_output_candidate": name in review.output_names(assessment.tabs),
         })
 
     return {
         "file_name": val(fa.file_name),
         "business_area_process": val(fa.business_area_process),
+        "reconciliation": val(fa.reconciliation_logic),
         "complexity": val(fa.complexity),
         "logic_type": val(fa.logic_type),
         "logic_types": val(fa.logic_types),
@@ -126,7 +132,7 @@ class OfflineAssessor:
         logic = bundle.get("logic_type") or "Other"
         cats = [t["category"] for t in bundle["tabs"]]
         cat_counts = ", ".join(sorted({c for c in cats})) or "no classified tabs"
-        outputs = [t["name"] for t in bundle["tabs"] if t["category"] == "Output"]
+        outputs = [t["name"] for t in bundle["tabs"] if t["final_output_candidate"]]
         top_fns = (bundle.get("key_calculations") or {}).get("top_functions", []) \
             if isinstance(bundle.get("key_calculations"), dict) else []
 
@@ -153,7 +159,7 @@ class OfflineAssessor:
 
         key_outputs = []
         for t in bundle["tabs"]:
-            if t["category"] == "Output":
+            if t["final_output_candidate"]:
                 label = t["name"]
                 if t["headers"]:
                     label += f" ({', '.join(t['headers'][:5])})"
@@ -170,10 +176,30 @@ class OfflineAssessor:
                 + (" Hidden sheet." if t["hidden"] else "")
             )
 
+        evidence_text = " ".join(
+            [bundle.get("file_name", "")]
+            + [t["name"] for t in bundle["tabs"]]
+            + [str(h) for t in bundle["tabs"] for h in t.get("headers", [])]
+        ).lower()
+        process = sub_process = "Not established — owner confirmation required"
+        if "ageing" in evidence_text or "aging" in evidence_text:
+            process, sub_process = "Ageing Analysis & Reporting", "Ageing Analysis"
+        elif "claim" in evidence_text and any(x in evidence_text for x in ("reserve", "reserving", "ibnr")):
+            process, sub_process = "Claims Reserving & Reporting", "Reserve Analysis"
+        elif any(x in evidence_text for x in ("financial statement", "balance sheet", "profit and loss")):
+            process, sub_process = "Financial Reporting", "Financial Statement Preparation"
+        elif (bundle.get("reconciliation") or {}).get("count", 0):
+            process = "Financial Reconciliation & Control"
+            sub_process = "GL Reconciliation" if any(x in evidence_text for x in ("ledger", " gl ", "trial balance")) else "Reconciliation"
+        elif any(x in evidence_text for x in ("management report", "dashboard", " mi ")):
+            process, sub_process = "Management Information Reporting", "MI Preparation"
+
         return Narrative(
             purpose_of_file=purpose,
             key_output_outcome=outcome,
-            key_outputs=key_outputs or ["no distinct output tab identified"],
+            key_outputs=key_outputs or ["no final business deliverable established — owner confirmation required"],
+            process=process,
+            sub_process=sub_process,
             tabs=tab_purposes,
         )
 
@@ -194,7 +220,10 @@ _SYSTEM = (
     "workings; a chart of accounts is a reference input, not a final deliverable. "
     "Do not infer manual effort from stored cells, retirement from hidden sheets, or "
     "proven error propagation from sheet-level dependencies. Do not invent usage frequency, "
-    "deadlines, recipients, reconciliation keys/tolerances or VBA use cases."
+    "deadlines, recipients, reconciliation keys/tolerances or VBA use cases. "
+    "For Process and Sub-Process, use 'Not established — owner confirmation required' "
+    "when structural evidence is weak. Key Outputs may only use tabs marked "
+    "final_output_candidate; terminal or formula-heavy workings are not deliverables."
 )
 
 _INSTRUCTION = (
@@ -202,6 +231,8 @@ _INSTRUCTION = (
     '  "purpose_of_file": string — 1-2 sentences on what the workbook is for.\n'
     '  "key_output_outcome": string — the business outcome it supports.\n'
     '  "key_outputs": array of strings — the main outputs produced.\n'
+    '  "process": string — broader end-to-end business process, or the required not-established wording.\n'
+    '  "sub_process": string — intermediate business outcome/activity, or the required not-established wording.\n'
     '  "tabs": object mapping each tab name to a one-sentence purpose.\n'
     "Evidence:\n"
 )
@@ -241,6 +272,8 @@ class ClaudeAssessor:
             purpose_of_file=data.get("purpose_of_file"),
             key_output_outcome=data.get("key_output_outcome"),
             key_outputs=data.get("key_outputs"),
+            process=data.get("process"),
+            sub_process=data.get("sub_process"),
             tabs=data.get("tabs") or {},
         )
 
@@ -312,6 +345,8 @@ class OpenAIAssessor:
             purpose_of_file=data.get("purpose_of_file"),
             key_output_outcome=data.get("key_output_outcome"),
             key_outputs=data.get("key_outputs"),
+            process=data.get("process"),
+            sub_process=data.get("sub_process"),
             tabs=data.get("tabs") or {},
         )
 

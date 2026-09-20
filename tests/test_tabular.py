@@ -46,7 +46,8 @@ def test_csv_export_roundtrips(xray, tmp_path):
         rows = list(csv.DictReader(fh))
     assert rows[0].keys() >= {"File", "Level", "Type", "Field", "Value", "Basis"}
     # File-level plus every tab's fields are present.
-    assert any(r["Field"] == "Logic Type" and r["Level"] == "File" for r in rows)
+    assert any(r["Field"] == "Logic Types" and r["Level"] == "File" for r in rows)
+    assert not any(r["Field"] == "Logic Type" and r["Level"] == "File" for r in rows)
     assert any(r["Level"].startswith("Tab:") for r in rows)
 
 

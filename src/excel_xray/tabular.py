@@ -10,12 +10,20 @@ from __future__ import annotations
 import csv
 import json
 
+from .review import short_source
+
 # (Type / section, dataclass attribute, human label) — order and wording match
 # the target schema.
 FILE_FIELDS = [
     ("Fact Assessment", "file_id", "File ID"),
     ("Fact Assessment", "file_name", "File Name"),
+    ("Fact Assessment", "scan_status", "Scan Status"),
+    ("Fact Assessment", "scan_error", "Scan Error"),
+    ("Fact Assessment", "sheet_count_total", "No. of Sheets - Total"),
+    ("Fact Assessment", "sheet_count_hidden", "No. of Sheets - Hidden"),
     ("Fact Assessment", "business_area_process", "Business Area / Process"),
+    ("Fact Assessment", "process", "Process"),
+    ("Fact Assessment", "sub_process", "Sub-Process"),
     ("Fact Assessment", "purpose_of_file", "Purpose of File"),
     ("Fact Assessment", "key_output_outcome", "Key Output / Outcome"),
     ("Fact Assessment", "complexity", "Complexity"),
@@ -32,8 +40,7 @@ FILE_FIELDS = [
     ("Key AI Finding / Observation", "potential_consolidation", "Potential Consolidation"),
     ("Key AI Finding / Observation", "potential_automation", "Potential Automation"),
     ("Key AI Finding / Observation", "potential_retirement", "Potential Retirement"),
-    ("Workbook logic / Automation", "logic_type", "Logic Type"),
-    ("Workbook logic / Automation", "logic_types", "All Detected Logic Types"),
+    ("Workbook logic / Automation", "logic_types", "Logic Types"),
     ("Workbook logic / Automation", "key_calculations_logic", "Key calculations / logic"),
     ("Workbook logic / Automation", "reconciliation_logic", "Reconciliation logic"),
     ("Workbook logic / Automation", "manual_intervention", "Manual intervention"),
@@ -68,10 +75,19 @@ def fmt_value(v) -> str:
         if v and all(isinstance(x, dict) and "source_type" in x for x in v):
             groups = {}
             for item in v:
-                groups.setdefault(item["purpose"], []).append(item["source"])
-            return "\n".join(f"{purpose}: {', '.join(names[:5])}"
-                             + (f" (+{len(names)-5} more)" if len(names) > 5 else "")
-                             for purpose, names in groups.items()) + "\nSee Input sources for providers, consumer tabs and essentiality questions."
+                detail = f"{item['source']} — {item['purpose']}"
+                if item.get("reference_count", 0) > 1:
+                    detail += f" ({item['reference_count']} references)"
+                groups.setdefault(item["source_type"], []).append(detail)
+            order = ("In-workbook tabs", "External workbooks", "Formal data connections",
+                     "Pivot sources", "Unresolved sources")
+            lines = []
+            for group in order:
+                items = groups.get(group, [])
+                lines.append(f"{group}: " + (", ".join(items[:5]) if items else "none detected"))
+                if len(items) > 5:
+                    lines[-1] += f" (+{len(items)-5} more)"
+            return "\n".join(lines) + "\nSee Input sources for consumer tabs, observation status and owner-confirmation notes."
         return "\n".join(fmt_value(x) for x in v) if v else "—"
     if isinstance(v, dict):
         if "purpose" in v and "source_type" in v:
@@ -84,11 +100,18 @@ def fmt_value(v) -> str:
                     + ("\nExternal references exist but their targets were not resolved." if v["unresolved_external"] else "")
                     + "\n" + v["scope"])
         if "reconciliations" in v:
-            return "\n".join(
-                f"{r['tab']}: source candidates: {', '.join(r['sources']) or 'not resolved'}; "
-                f"target: {r['comparison_target']}; key candidates: {', '.join(r['matching_key_candidates']) or 'not established'}; "
-                f"{r['matching_key_status']}; tolerance: {r['tolerance']}; use: {r['result_use']}"
-                for r in v["reconciliations"])
+            lines = [f"Confirmed reconciliations: {v.get('count', len(v['reconciliations']))}; status: {v.get('status', 'unknown')}"]
+            lines += [
+                f"{r['overview']}; source A: {r['source_a']}; source B: {r['source_b']}; "
+                f"matching criteria: {r['matching_criteria']}; tolerance: {r['tolerance']}; "
+                f"exception logic: {r['exception_logic']}"
+                for r in v["reconciliations"]
+            ]
+            lines += [
+                f"Review candidate — {r['worksheet']}: {r['observed_signal']} {r['confirmation_required']}"
+                for r in v.get("candidates_requiring_review", [])
+            ]
+            return "\n".join(lines)
         if "summary" in v:
             return str(v["summary"])
         if "verdict" in v:
@@ -160,6 +183,7 @@ def to_csv(named_assessments, path: str) -> str:
         w.writerow(["File", "Level", "Type", "Field", "Value", "Basis",
                     "Confidence", "Evidence"])
         for fname, a in named_assessments:
+            fname = short_source(fname)
             for r in file_rows(a):
                 w.writerow([fname, "File", r["type"], r["field"], r["value"],
                             r["basis"], r["confidence"], r["evidence"]])

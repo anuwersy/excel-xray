@@ -95,9 +95,9 @@ def _apply_corpus(assessment, fp: Fingerprint, others: list[Fingerprint]) -> Non
 
     if not others:
         note = "only one workbook in the corpus — no comparison possible"
-        fa.potential_duplication = Field.pending("needs_corpus", note)
-        fa.similar_duplicate_files = Field.pending("needs_corpus", note)
-        fa.potential_consolidation = Field.pending("needs_corpus", note)
+        fa.potential_duplication = Field(value="Requires corpus analysis", basis="needs_corpus", evidence=[note])
+        fa.similar_duplicate_files = Field(value="Requires corpus analysis", basis="needs_corpus", evidence=[note])
+        fa.potential_consolidation = Field(value="Requires corpus analysis", basis="needs_corpus", evidence=[note])
         return
 
     scored = sorted(

@@ -381,8 +381,8 @@ def build_report(wx: WorkbookXray, assessment=None) -> str:
 
     A("<header class='top'><div class='eyebrow'>Workbook X-ray &middot; structural scan</div>"
       f"<h1>{_esc(wx.filename)}</h1>"
-      f"<div class='meta mono'>{_esc(wx.sha256[:16])}&hellip; &middot; "
-      f"{wx.size_bytes:,} bytes &middot; modified {_esc(wx.fs_modified)} &middot; "
+      f"<div class='meta mono'>File ID {_esc(wx.sha256[:12])} &middot; "
+      f"scan {_esc(wx.parse_status)} &middot; modified {_esc(wx.fs_modified)} &middot; "
       f"last saved by {_esc((wx.app_props or {}).get('application') or 'unknown')}</div>")
 
     A("<div class='vitals'>")

@@ -152,11 +152,12 @@ most consequential constant in the detector.
 
 Produced at two levels, matching the review template:
 
-**File level summary** — File ID/Name, Business Area, Purpose, Key Output /
-Outcome, Complexity, Key Inputs, Source System, Key Outputs, Usage Frequency,
-Completion Timeline, EUC Preparer, Output Recipient; the AI findings (Potential
+**File level summary** — File ID/Name, scan status/error, total/hidden sheet
+counts, Business Area / Process, Process, Sub-Process, Purpose, Key Output /
+Outcome, Complexity, grouped Key Inputs, Source System, final Key Outputs,
+Usage Frequency, Completion Timeline, EUC Preparer, Output Recipient; the AI findings (Potential
 Duplication, Similar/Duplicate Files, Simplification, Consolidation, Automation,
-Retirement); and workbook logic (Logic Type, Key calculations, Reconciliation
+Retirement); and workbook logic (Logic Types, Key calculations, Reconciliation
 logic, Manual intervention, Macros/VBA/links).
 
 **Tab level details** — per sheet: Tab Name, Category (Input / Calculation /

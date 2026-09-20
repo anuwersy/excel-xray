@@ -66,7 +66,13 @@ class FileAssessment:
     # Fact Assessment
     file_id: Field = field(default_factory=Field)
     file_name: Field = field(default_factory=Field)
+    scan_status: Field = field(default_factory=Field)
+    scan_error: Field = field(default_factory=Field)
+    sheet_count_total: Field = field(default_factory=Field)
+    sheet_count_hidden: Field = field(default_factory=Field)
     business_area_process: Field = field(default_factory=Field)
+    process: Field = field(default_factory=Field)
+    sub_process: Field = field(default_factory=Field)
     purpose_of_file: Field = field(default_factory=Field)
     key_output_outcome: Field = field(default_factory=Field)
     complexity: Field = field(default_factory=Field)
@@ -203,7 +209,8 @@ def _logic_type(wx: WorkbookXray, t: dict) -> Field:
     if lookup:
         scores["Data Transformation"] += lookup
         ev.append(f"{lookup} lookup/match call(s) — retrieval or mapping, not proof of reconciliation")
-    if any(review.reconciliation(s, []) for s in wx.sheets):
+    reads, _ = _dependency_maps(wx)
+    if any(review.reconciliation(s, reads.get(s.name, set())) for s in wx.sheets):
         scores["Reconciliation"] += max(1, lookup + cond * 0.5)
         ev.append("reconciliation/variance labels detected")
     if agg:
@@ -249,16 +256,22 @@ def _key_inputs(wx: WorkbookXray) -> Field:
 
 
 def _source_system(wx: WorkbookXray) -> Field:
-    systems: list[str] = []
-    for c in wx.connections:
-        s = c.get("connection_string") or c.get("command") or c.get("description")
-        if s:
-            systems.append(str(s))
-    systems += [p for p in wx.pivot_cache_sources if ("!" not in p and p)]
+    # Never expose connection strings: they can contain servers, usernames,
+    # client folders, URLs or credentials. A generic workbook label such as
+    # "tb" is an input-purpose hint, not proof of the originating system.
+    systems = sorted({
+        review.short_source(str(c.get("name") or c.get("description")).strip())
+        for c in wx.connections
+        if (c.get("name") or c.get("description"))
+        and str(c.get("name") or c.get("description")).strip().lower()
+        not in {"connection", "query", "external data", "tb", "trial balance"}
+    })
     if systems:
-        return Field.extracted(sorted(set(systems)))
-    return Field.pending("needs_human",
-                         "no data connections declare a source system")
+        return Field.derived(systems, 0.65,
+            ["Names from formal Excel connection metadata; confirm the underlying provider/system with the owner"])
+    return Field(value="Not established — owner confirmation required",
+                 basis="needs_human",
+                 evidence=["No reliable formal system identifier was found; workbook labels such as 'tb' are not treated as source systems"])
 
 
 def _euc_preparer(wx: WorkbookXray) -> Field:
@@ -290,20 +303,32 @@ def _key_calculations(wx: WorkbookXray, t: dict) -> Field:
 def _manual_intervention(wx: WorkbookXray, t: dict) -> Field:
     ev = [f"{t['non_formula_cells']:,} stored cells; these may be imported, pasted, labels or manual entries"]
     if t["hardcoded"]:
-        ev.append(f"{t['hardcoded']} formula(s) contain hardcoded numeric constants; these are not necessarily manual assumptions")
+        ev.append(f"{t['hardcoded']} formula(s) contain hardcoded numeric constants; these may be embedded assumptions or overrides, not confirmed manual intervention")
     return Field(value="Not established — confirm which inputs are keyed, pasted, adjusted or overridden, by whom and how often.",
                  basis="needs_human", evidence=ev)
 
 
 def _macros_links(wx: WorkbookXray) -> Field:
-    parts: list[str] = []
-    if wx.has_vba:
-        parts.append("VBA macros present; code and invocation paths are not inspected. Confirm the macro use case, trigger, affected tabs and output with the owner.")
-    if wx.has_power_query:
-        parts.append("Power Query / DataMashup present; refresh steps and business use require confirmation.")
-    if wx.external_links or wx.connections:
-        parts.append("External data dependencies are described in Key Inputs.")
-    return Field.extracted(parts or ["none detected"])
+    external_refs = sum(s.formula_profile.get("external_count", 0) for s in wx.sheets)
+    distinct_external = len({review.short_source(x).casefold() for x in wx.external_links})
+    formal = len(wx.connections)
+    ref_word = "reference" if external_refs == 1 else "references"
+    book_word = "workbook" if distinct_external == 1 else "workbooks"
+    summary = (
+        f"VBA: {'present; use case requires owner confirmation' if wx.has_vba else 'none detected'}. "
+        f"Power Query: {'present; refresh steps and business use require owner confirmation' if wx.has_power_query else 'none detected'}. "
+        f"Formal data connections: {formal if formal else 'none detected'}. "
+        f"External workbook links: {external_refs} {ref_word} across "
+        f"{distinct_external} distinct external {book_word}."
+    )
+    return Field.extracted({
+        "summary": summary,
+        "vba": "present" if wx.has_vba else "none detected",
+        "power_query": "present" if wx.has_power_query else "none detected",
+        "formal_data_connections": formal,
+        "external_workbook_link_references": external_refs,
+        "distinct_external_workbooks": distinct_external,
+    }, ["Mechanisms are reported separately; no use case is inferred from presence alone"])
 
 
 # ------------------------------------------------- AI findings (Step 3)
@@ -356,12 +381,28 @@ def _recon_signals(wx: WorkbookXray, t: dict) -> list[str]:
 
 def _reconciliation_logic(wx: WorkbookXray, t: dict) -> Field:
     reads, _ = _dependency_maps(wx)
-    candidates = [item for s in wx.sheets if (item := review.reconciliation(s, reads[s.name]))]
-    if not candidates:
-        return Field.derived("No reconciliation pattern detected", 0.5,
-                             ["Lookup functions alone are not proof of reconciliation"])
-    return Field.derived({"reconciliations": candidates}, 0.6,
-        ["Sources are observed references; comparison direction, keys and tolerances require confirmation"])
+    reconciliations = []
+    candidates = []
+    for s in wx.sheets:
+        item = review.reconciliation(s, reads[s.name])
+        if item:
+            reconciliations.append(item)
+        elif candidate := review.reconciliation_candidate(s, reads[s.name]):
+            candidates.append(candidate)
+    status = "confirmed" if reconciliations else (
+        "candidates_requiring_review" if candidates else "none_identified")
+    value = {
+        "count": len(reconciliations),
+        "status": status,
+        "reconciliations": reconciliations,
+        "candidates_requiring_review": candidates,
+        "evidence": [
+            "A confirmed reconciliation must compare at least two observed sources and contain agreement, difference or exception evidence.",
+            "Lookup, IF and variance formulas alone are retained as review candidates and are not counted.",
+        ],
+    }
+    confidence = 0.75 if reconciliations else 0.6
+    return Field.derived(value, confidence, value["evidence"])
 
 
 def _simplification(wx: WorkbookXray, t: dict) -> Field:
@@ -400,8 +441,9 @@ def _automation(wx: WorkbookXray, t: dict) -> Field:
         against.append("many bespoke one-off formulas — logic is not uniform")
     if wx.connections or wx.external_links:
         drivers.append("existing data connections/links — source is already systemised")
-    if any(review.reconciliation(s, []) for s in wx.sheets):
-        drivers.append("reconciliation/lookup logic — a classic automation target")
+    reads, _ = _dependency_maps(wx)
+    if any(review.reconciliation(s, reads.get(s.name, set())) for s in wx.sheets):
+        drivers.append("confirmed reconciliation structure — comparison rules may be suitable for controlled automation")
     if wx.has_vba:
         drivers.append("already partly automated via VBA/macros")
 
@@ -423,7 +465,7 @@ def _retirement(wx: WorkbookXray) -> Field:
     name = wx.filename.lower()
     if any(k in name for k in _SUPERSEDED_NAMES):
         signals.append("filename suggests a superseded/backup copy")
-    return Field(value={"verdict": "Not established — owner decision required",
+    return Field(value={"verdict": "Not established — owner confirmation required",
                         "signals": signals,
                         "confirmation": "Confirm active usage, recipients, replacement coverage and retention requirements. Hidden sheets and cached errors are not retirement evidence."},
                  basis="needs_human", evidence=signals + ["file age and naming are context only, not proof of disuse"])
@@ -432,6 +474,7 @@ def _retirement(wx: WorkbookXray) -> Field:
 _BUSINESS_AREA = {
     "Calculation": "Calculation / modelling",
     "Reconciliation": "Reconciliation / control",
+    "Reconciliation / Control": "Reconciliation / control",
     "Data Transformation": "Data preparation / transformation",
     "Reporting": "Reporting / MI",
     "Manual Input": "Manual data capture",
@@ -457,6 +500,20 @@ def assess_file(wx: WorkbookXray) -> FileAssessment:
     # Fact Assessment — extracted / derived
     fa.file_id = Field.extracted(wx.sha256[:12], ["content hash (stable across renames)"])
     fa.file_name = Field.extracted(wx.filename)
+    fa.scan_status = Field.extracted(wx.parse_status)
+    incomplete = [review.safe_message(x, wx.path) for x in wx.warnings]
+    incomplete += [review.safe_message(n, wx.path) for s in wx.sheets for n in s.notes]
+    if wx.parse_status == "full":
+        scan_error = "N/A"
+    elif incomplete:
+        scan_error = "; ".join(dict.fromkeys(incomplete))
+    elif wx.parse_status == "failed":
+        scan_error = "Workbook scan failed; no technical error detail was retained."
+    else:
+        scan_error = "Workbook scan was partial; some content could not be read."
+    fa.scan_error = Field.extracted(scan_error)
+    fa.sheet_count_total = Field.extracted(len(wx.sheets))
+    fa.sheet_count_hidden = Field.extracted(sum(s.state != "visible" for s in wx.sheets))
     fa.complexity = _complexity(wx, t)
     fa.key_inputs = _key_inputs(wx)
     fa.source_system = _source_system(wx)
@@ -466,14 +523,19 @@ def assess_file(wx: WorkbookXray) -> FileAssessment:
     fa.purpose_of_file = Field.pending("needs_llm", "narrative from structure + headers")
     fa.key_output_outcome = Field.pending("needs_llm", "business outcome the model supports")
     fa.key_outputs = Field.pending("needs_llm", "name outputs from terminal/reporting tabs")
+    fa.process = Field.pending("needs_llm", "broader end-to-end process supported by workbook evidence")
+    fa.sub_process = Field.pending("needs_llm", "intermediate business activity supported by workbook evidence")
     fa.usage_frequency = Field.pending("needs_human", "How often is this process run: daily, monthly, quarterly or ad hoc?")
     fa.completion_timeline = Field.pending("needs_human", "What is the completion deadline relative to period-end, and how long does preparation take?")
     fa.output_recipient = Field.pending("needs_human", "Which team, person or downstream process receives the final deliverable?")
 
     # Key AI Finding / Observation — heuristic (Step 3); corpus ones deferred
-    fa.potential_duplication = Field.pending("needs_corpus", "needs the folder of workbooks")
-    fa.similar_duplicate_files = Field.pending("needs_corpus", "needs the folder of workbooks")
-    fa.potential_consolidation = Field.pending("needs_corpus", "needs the folder of workbooks")
+    fa.potential_duplication = Field(value="Requires corpus analysis", basis="needs_corpus",
+                                     evidence=["needs comparison with other workbooks"])
+    fa.similar_duplicate_files = Field(value="Requires corpus analysis", basis="needs_corpus",
+                                       evidence=["needs comparison with other workbooks"])
+    fa.potential_consolidation = Field(value="Requires corpus analysis", basis="needs_corpus",
+                                       evidence=["needs comparison with other workbooks"])
     fa.potential_simplification = _simplification(wx, t)
     fa.potential_automation = _automation(wx, t)
     fa.potential_retirement = _retirement(wx)
@@ -627,7 +689,36 @@ def _apply_narrative(a: Assessment, narr, basis: str, label: str) -> None:
 
     put(a.file.purpose_of_file, narr.purpose_of_file)
     put(a.file.key_output_outcome, narr.key_output_outcome)
-    put(a.file.key_outputs, narr.key_outputs)
+    eligible_outputs = review.output_names(a.tabs)
+    proposed_outputs = narr.key_outputs or []
+    final_outputs = [
+        item for item in proposed_outputs
+        if any(name.casefold() in str(item).casefold() for name in eligible_outputs)
+    ]
+    if not final_outputs:
+        final_outputs = sorted(eligible_outputs) or [
+            "no final business deliverable established — owner confirmation required"
+        ]
+    put(a.file.key_outputs, final_outputs)
+    a.file.key_outputs.evidence.append(
+        "Limited to report/deliverable tabs; inputs, mappings, helpers and intermediate workings are excluded"
+    )
+    put(a.file.process, narr.process)
+    put(a.file.sub_process, narr.sub_process)
+    for fld in (a.file.process, a.file.sub_process):
+        if fld.value is None:
+            fld.value = "Not established — owner confirmation required"
+            fld.basis = "needs_human"
+            fld.confidence = None
+            fld.evidence = ["The assessor did not establish this field from workbook evidence"]
+    # Opportunity details are built before the narrative step. Fill their
+    # process context now that the offline or model assessor has supplied it.
+    for fld, key in ((a.file.potential_simplification, "details"),
+                     (a.file.potential_automation, "details")):
+        if isinstance(fld.value, dict):
+            for item in fld.value.get(key, []):
+                item["process"] = a.file.process.value
+                item["sub_process"] = a.file.sub_process.value
     for ta in a.tabs:
         put(ta.tab_purpose_description, narr.tabs.get(ta.tab_name.value))
 
@@ -640,9 +731,10 @@ def _business_review(a, wx, reads, read_by):
         ["Purposes inferred from source labels; consumers listed only when observed; essentiality requires owner confirmation"])
     a.error_summary = review.error_summary(wx, a.tabs, read_by)
     a.hidden_groups = review.hidden_groups(wx, a.tabs, read_by)
-    detected = [fa.logic_type.value] if fa.logic_type.value != "Other" else []
+    canonical_logic = {"Reconciliation": "Reconciliation / Control"}
+    detected = [canonical_logic.get(fa.logic_type.value, fa.logic_type.value)] if fa.logic_type.value != "Other" else []
     role_logic = {"Calculation": "Calculation", "Output": "Reporting",
-                  "Mapping": "Data Transformation", "Control Check": "Reconciliation"}
+                  "Mapping": "Data Transformation", "Control Check": "Reconciliation / Control"}
     for t in a.tabs:
         for role in t.tab_roles.value:
             if role in role_logic:
@@ -663,9 +755,7 @@ def _business_review(a, wx, reads, read_by):
     calculation_sheets = sorted((s for s in wx.sheets if s.formula_profile.get("total")),
                                key=lambda s: -s.formula_profile.get("total", 0))
     operations = [review.calculation(s)["summary"] for s in calculation_sheets]
-    existing = fa.key_calculations_logic.value or {}
-    if not isinstance(existing, dict):
-        existing = {}
+    existing = {}
     existing["summary"] = "\n".join(operations[:5]) or "No worksheet calculations detected."
     if len(operations) > 5:
         existing["summary"] += f"\nShowing the five largest formula workloads; all {len(operations)} tab operations appear in Calculation steps."
@@ -674,26 +764,71 @@ def _business_review(a, wx, reads, read_by):
                            "potential_outputs": sorted(review.reachable(s.name, read_by) & review.output_names(a.tabs))}
                           for s in wx.sheets if s.formula_profile.get("total")]
     fa.key_calculations_logic = Field.derived(existing, 0.65,
-        ["Business operation summaries inferred from formulas and labels; technical patterns retained for traceability"])
-    opportunities, automation_steps = [], []
+        ["Business operation summaries inferred from formulas and labels; formula counts and patterns remain in the technical appendix"])
+    opportunities, opportunity_details, automation_steps, automation_details = [], [], [], []
+    unknown_process = "Not established — owner confirmation required"
     for s in wx.sheets:
         fp = s.formula_profile
         activity = review.calculation(s)["summary"]
         if fp.get("hardcoded_literal_count", 0) > 5:
-            opportunities.append(f"{s.name}: confirm which hardcoded numbers are business assumptions before centralising them. Activity: {activity}")
+            action = "Confirm which hardcoded embedded constants are business assumptions or overrides before centralising them."
+            opportunities.append(f"{s.name}: {action} Activity: {activity}")
+            opportunity_details.append({"process": unknown_process, "sub_process": unknown_process,
+                "worksheets": [s.name], "observed_evidence": "Hardcoded numeric constants occur in formulas",
+                "candidate_action": action, "confirmation_required": "Confirm ownership, meaning, approval and permitted override process."})
         if fp.get("volatile_count"):
-            opportunities.append(f"{s.name}: review recalculation-dependent logic for a more stable design. Activity: {activity}")
+            action = "Review recalculation-dependent logic for a more stable design."
+            opportunities.append(f"{s.name}: {action} Activity: {activity}")
+            opportunity_details.append({"process": unknown_process, "sub_process": unknown_process,
+                "worksheets": [s.name], "observed_evidence": "Volatile functions are present",
+                "candidate_action": action, "confirmation_required": "Confirm intended recalculation behaviour and control ownership."})
         count, distinct = fp.get("total", 0), fp.get("distinct_skeletons", 0)
         if count > 50 and distinct and count / distinct < 3:
-            opportunities.append(f"{s.name}: review one-off calculation rules for standardisation. Activity: {activity}")
+            action = "Review one-off calculation rules for standardisation."
+            opportunities.append(f"{s.name}: {action} Activity: {activity}")
+            opportunity_details.append({"process": unknown_process, "sub_process": unknown_process,
+                "worksheets": [s.name], "observed_evidence": "Low formula-pattern reuse",
+                "candidate_action": action, "confirmation_required": "Confirm whether the variants represent valid business exceptions."})
         if count and distinct and count / distinct >= 5:
-            automation_steps.append(f"{s.name}: candidate to standardise repeated calculation rules; inputs: {', '.join(sorted(reads[s.name])) or 'local inputs (confirm source)'}. Confirm whether any manual work actually occurs before automating. Activity: {activity}")
+            action = "Candidate — workflow confirmation required: assess repeated calculation rules for controlled automation."
+            automation_steps.append(f"{s.name}: {action} Inputs: {', '.join(sorted(reads[s.name])) or 'local inputs (confirm source)'}. Activity: {activity}")
+            automation_details.append({"process": unknown_process, "sub_process": unknown_process,
+                "worksheets": [s.name], "observed_evidence": "Repeated formula patterns",
+                "candidate_action": action,
+                "confirmation_required": "Confirm the actual repeated manual step, source availability, frequency, exceptions, approvals and controls."})
+    for source in a.input_groups:
+        if source["source_type"] not in {"External workbooks", "Formal data connections"}:
+            continue
+        if not source["consumers"]:
+            continue
+        action = "Candidate — workflow confirmation required: assess controlled source ingestion and refresh."
+        automation_steps.append(
+            f"{', '.join(source['consumers'])}: {action} Observed source: {source['source']}."
+        )
+        automation_details.append({
+            "process": unknown_process, "sub_process": unknown_process,
+            "worksheets": source["consumers"],
+            "observed_evidence": f"Observed {source['source_type'].lower()} dependency: {source['source']}",
+            "candidate_action": action,
+            "confirmation_required": "Confirm the actual repeated manual step, source availability, refresh frequency, exceptions, approvals and controls.",
+        })
+    for rec in fa.reconciliation_logic.value.get("reconciliations", []):
+        action = "Candidate — workflow confirmation required: assess controlled matching and exception workflow automation."
+        automation_steps.append(f"{rec['worksheet']}: {action}")
+        automation_details.append({
+            "process": unknown_process, "sub_process": unknown_process,
+            "worksheets": [rec["worksheet"]],
+            "observed_evidence": rec["overview"],
+            "candidate_action": action,
+            "confirmation_required": "Confirm matching rules, tolerance, exception ownership, frequency, approvals and controls.",
+        })
     fa.potential_simplification = Field.derived(
-        {"verdict": "Review candidates" if opportunities else "No supported candidate identified",
-         "opportunities": opportunities}, 0.65,
+        {"verdict": "Candidate — workflow confirmation required" if opportunities else "No supported candidate identified",
+         "opportunities": opportunities, "details": opportunity_details}, 0.65,
         ["Opportunities tied to named activities; cached errors are in Error summary, not treated as retirement evidence"])
     au = fa.potential_automation.value
     au["steps"] = automation_steps
+    au["details"] = automation_details
     if not automation_steps:
         au["steps"] = ["No repeated manual step established. Ask the owner to describe source extraction, copying, adjustments and approvals."]
 

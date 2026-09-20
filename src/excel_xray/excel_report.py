@@ -199,8 +199,9 @@ def write_excel_report(wx, path, assessment):
         warnings += [[s.name, "Scan note", n] for n in s.notes]
         warnings += [[s.name, "Cached Excel error", e] for e in s.error_cells]
     warnings += [["Workbook", "Scan warning", w] for w in wx.warnings]
-    metadata = [["Source file", wx.filename], ["Source path", wx.path],
-                ["SHA-256", wx.sha256], ["Parse status", wx.parse_status],
+    metadata = [["Source file", wx.filename], ["File ID", assessment.file.file_id.value],
+                ["Scan Status", assessment.file.scan_status.value],
+                ["Scan Error", assessment.file.scan_error.value],
                 ["Source modified", wx.fs_modified], ["VBA present", wx.has_vba],
                 ["Hidden sheets", f"{sum(s.state != 'visible' for s in wx.sheets)} of {len(wx.sheets)} sheets are hidden"],
                 ["Cached errors", sum(len(s.error_cells) for s in wx.sheets)],
@@ -209,7 +210,18 @@ def write_excel_report(wx, path, assessment):
                 ["Formula coverage", "Top 15 formula patterns per source sheet; formulas are not recalculated."],
                 ["Review", "Use Reviewer value and Reviewer notes to record amendments. Regenerating replaces these edits."],
                 ["Interpretation", "Derived scores are heuristics; drafted and inferred text require review."],
-                ["Privacy", "Headers, source paths and assessment metadata may be sensitive."]]
+                ["Privacy", "Headers and assessment metadata may be sensitive. Local paths and full file hashes are excluded."]]
+
+    opportunity_rows = []
+    for kind, fld in (("Simplification", assessment.file.potential_simplification),
+                      ("Automation", assessment.file.potential_automation)):
+        details = fld.value.get("details", []) if isinstance(fld.value, dict) else []
+        for item in details:
+            opportunity_rows.append([
+                kind, item.get("process"), item.get("sub_process"),
+                ", ".join(item.get("worksheets", [])), item.get("observed_evidence"),
+                item.get("candidate_action"), item.get("confirmation_required"), fld.basis,
+            ])
     return _write(path, [
         ("File assessment", ["Section", "Field", "Value", "Basis", "Confidence", "Evidence", "Reviewer value", "Reviewer notes"], summary, [28, 32, 65, 18, 14, 65, 40, 45], (5,)),
         ("Tab assessments", ["Source tab", "Section", "Field", "Value", "Basis", "Confidence", "Evidence", "Reviewer value", "Reviewer notes"], tabs, [25, 28, 35, 65, 18, 14, 65, 40, 45], (6,)),
@@ -224,17 +236,14 @@ def write_excel_report(wx, path, assessment):
         ("Hidden sheet groups", ["Purpose candidate", "Group size", "Hidden tab", "Potential supported outputs", "Explanation", "Basis"],
          [[r["purpose"], r["count"], name, ", ".join(r["supports"]) or "No output path observed", r["explanation"], r["basis"]] for r in assessment.hidden_groups for name in r["tabs"]],
          [28, 12, 55, 55, 60, 18], ()),
-        ("Input sources", ["Business purpose candidate", "Source", "Source type", "Consumer tabs", "Association evidence", "Essentiality"],
-         [[r["purpose"], r["source"], r["source_type"], ", ".join(r["consumers"]) or "Not resolved", r["association"], r["essential"]] for r in assessment.input_groups],
-         [35, 50, 25, 55, 65, 40], ()),
+        ("Input sources", ["Group", "Business purpose candidate", "Source", "Reference count", "Consumer tabs", "Relationship", "Directly observed?", "Essentiality / confirmation"],
+         [[r["source_type"], r["purpose"], r["source"], r.get("reference_count", 1), ", ".join(r["consumers"]) or "Not resolved", r["association"], "Yes" if r.get("observed") else "No / unresolved", r["essential"]] for r in assessment.input_groups],
+         [28, 35, 50, 16, 55, 65, 20, 45], ()),
         ("Calculation steps", ["Source tab", "Observed input tabs", "Principal operation", "Potential business outputs"],
          [[r["tab"], ", ".join(r["inputs"]) or "No cross-tab reference observed", r["operation"], ", ".join(r["potential_outputs"]) or "No output path observed"] for r in assessment.file.key_calculations_logic.value.get("steps", [])],
          [30, 45, 100, 50], ()),
-        ("Review opportunities", ["Type", "Candidate action", "Basis"],
-         [[kind, item, fld.basis] for kind, fld, key in
-          [("Simplification", assessment.file.potential_simplification, "opportunities"),
-           ("Automation", assessment.file.potential_automation, "steps")]
-          for item in fld.value.get(key, [])], [25, 100, 18], ()),
+        ("Review opportunities", ["Type", "Process", "Sub-Process", "Relevant worksheets", "Observed evidence", "Candidate action", "Confirmation required", "Basis"],
+         opportunity_rows, [22, 34, 34, 40, 55, 70, 75, 18], ()),
     ], [wx.path])
 
 

@@ -129,17 +129,20 @@ def test_lookup_only_is_not_reconciliation_and_keys_are_candidates(xray):
     wx = deepcopy(xray)
     wx.sheets = [sheet("Mapping", formulas=70, functions=[("VLOOKUP", 70)])]
     a = assess(wx)
-    assert a.file.reconciliation_logic.value == "No reconciliation pattern detected"
+    assert a.file.reconciliation_logic.value["count"] == 0
+    assert a.file.reconciliation_logic.value["status"] == "candidates_requiring_review"
     assert a.file.logic_type.value == "Data Transformation"
     wx.sheets += [sheet("Trial balance", position=1), sheet("Ledger", position=2),
                   sheet("Reconciliation", position=3, formulas=90,
                         reads=["Trial balance", "Ledger"], headers=["Account code", "Variance"])]
     a = assess(wx)
-    r = a.file.reconciliation_logic.value["reconciliations"][0]
-    assert r["sources"] == ["Ledger", "Trial balance"]
-    assert r["matching_key_candidates"] == ["Account code"]
-    assert "confirm" in r["tolerance"].lower()
-    assert "Reconciliation" in a.file.logic_types.value
+    result = a.file.reconciliation_logic.value
+    assert result["count"] == 1
+    r = result["reconciliations"][0]
+    assert [r["source_a"], r["source_b"]] == ["Ledger", "Trial balance"]
+    assert "Account code" in r["matching_criteria"]
+    assert r["tolerance"] == "Not established"
+    assert "Reconciliation / Control" in a.file.logic_types.value
 
 
 def test_stored_cells_do_not_prove_manual_input(xray):

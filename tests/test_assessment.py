@@ -21,7 +21,8 @@ def test_extracted_facts(xray):
     fa = assess(xray).file
     assert fa.file_name.value == "messy_reserving_model.xlsx"
     assert fa.file_id.basis == "extracted" and len(fa.file_id.value) == 12
-    assert fa.macros_vba_external_links.value == ["none detected"]
+    assert fa.macros_vba_external_links.value["vba"] == "none detected"
+    assert fa.macros_vba_external_links.value["power_query"] == "none detected"
 
 
 def test_complexity_is_low_for_small_fixture(xray):
@@ -59,7 +60,7 @@ def test_key_calculations_extracted(xray):
     fa = assess(xray).file
     assert fa.key_calculations_logic.basis == "derived"
     assert fa.key_calculations_logic.value["summary"]
-    assert fa.key_calculations_logic.value["top_functions"]
+    assert "top_functions" not in fa.key_calculations_logic.value
 
 
 # --------------------------------------------------------------- tab level
@@ -118,7 +119,7 @@ def test_simplification_ties_hardcodes_to_activity_not_hidden_status(xray):
     fa = assess(xray).file
     sf = fa.potential_simplification
     assert sf.basis == "derived"
-    assert sf.value["verdict"] == "Review candidates"
+    assert sf.value["verdict"] == "Candidate — workflow confirmation required"
     ops = " ".join(sf.value["opportunities"])
     assert "hardcoded" in ops and "Calc" in ops and "hidden" not in ops
 
@@ -138,14 +139,15 @@ def test_retirement_defers_when_no_signal(xray):
     rt = fa.potential_retirement
     assert rt.basis in {"derived", "needs_human"}
     if rt.basis == "needs_human":
-        assert rt.value["verdict"] == "Not established — owner decision required"
+        assert rt.value["verdict"] == "Not established — owner confirmation required"
 
 
 def test_reconciliation_absent_on_calc_model(xray):
     fa = assess(xray).file
     rl = fa.reconciliation_logic
     assert rl.basis == "derived"
-    assert rl.value == "No reconciliation pattern detected"
+    assert rl.value["count"] == 0
+    assert rl.value["status"] == "none_identified"
 
 
 def test_corpus_findings_still_deferred(xray):

@@ -7,6 +7,9 @@ business facts are not hardcoded into the scanner.
 
 ## Header and error review
 
+- A successful assessment reports **Scan Status = full** and **Scan Error =
+  N/A**. Partial and failed scans retain a concise explanation of unread or
+  failed content. Cached Excel formula errors remain a separate diagnostic.
 - Report hidden sheets as **N of M sheets are hidden**, with purpose groups,
   member tabs and potentially supported outputs. Hidden status does not imply
   obsolescence, weak controls or retirement suitability.
@@ -49,13 +52,23 @@ business facts are not hardcoded into the scanner.
 
 ## File-level review
 
-- Business Area / Process and All Detected Logic Types include multiple
-  supported activities. The existing primary Logic Type remains available.
-- Group inputs by candidate business purpose: trial balance, claims, FX,
+- **Business Area / Process** consolidates high-level functional tab roles.
+  **Process** describes the broader end-to-end business process and
+  **Sub-Process** the intermediate outcome/activity. If structural evidence is
+  weak, both use **Not established — owner confirmation required**.
+- The client-facing summary contains one deduplicated **Logic Types** field.
+  Its taxonomy is Calculation, Reporting, Data Transformation,
+  Reconciliation / Control, Manual Input and Other. A primary logic type may
+  remain internal for compatibility.
+- Group inputs into In-workbook tabs, External workbooks, Formal data
+  connections, Pivot sources and Unresolved sources. Within those groups,
+  classify candidate business purpose: trial balance, claims, FX,
   prior-period data, adjustments, mapping, policy/premium data, assumptions,
   tax, reserves and financial reporting. Label inferred purposes as derived;
-  list providing files/tabs and consumers where observed. Essentiality needs
-  owner confirmation.
+  list providing files/tabs and consumers where observed. Decode and shorten
+  source names, deduplicate them and retain reference counts. Essentiality
+  needs owner confirmation. A `tb` label means Trial balance input; it does not
+  establish the source system.
 - Separate final deliverable candidates from inputs and intermediate workings.
   Do not promote every terminal working tab to a final output.
 - Tie simplification and automation candidates to a named tab, its operation
@@ -63,17 +76,23 @@ business facts are not hardcoded into the scanner.
   Stored values could be imports, labels, pasted data or manual entry; they do
   not demonstrate repetitive manual work. Ask about the actual process step,
   recurrence, exceptions and approvals before claiming automation savings.
-- Explain principal calculation steps and possible business outputs alongside
-  the retained technical function and formula-pattern evidence.
-- Treat lookup functions as retrieval/mapping until reconciliation labels or
-  other evidence support a reconciliation interpretation. List observed source
-  candidates and header-based matching-key candidates; comparison direction,
-  actual keys, tolerances and exception use remain questions when not resolved.
+- Explain principal calculation steps in plain business language. Function
+  frequencies and formula skeletons stay in the technical appendix and are not
+  repeated in the client-facing calculation summary.
+- A confirmed reconciliation requires an observed comparison of at least two
+  sources plus agreement, difference or exception evidence. Lookup, IF,
+  variance and roll-forward formulas alone are not reconciliations. Ambiguous
+  signals remain candidates requiring review and are excluded from the
+  confirmed count. Each confirmed item identifies both sources, matching
+  criteria, tolerance, exception logic, evidence and confidence; unsupported
+  details remain **Not established**.
 - Retain Manual Intervention as **needs_human**, rather than a misleading
   High/Medium/Low score based on non-formula cell counts.
-- Focus the macro field on VBA/Power Query presence. The scanner does not inspect
+- Report VBA, Power Query, formal connections and external workbook links as
+  separate mechanisms. The scanner does not inspect
   VBA code or execute macros, so business use cases, triggers and affected
-  outputs require confirmation. External dependency details belong in inputs.
+  outputs require confirmation. Formal connections may be absent while
+  external workbook formula links are present.
 - Usage frequency, deadline and recipient remain **needs_human** with specific
   reviewer questions and the existing editable Excel reviewer columns. More
   sample workbooks alone cannot establish these operational facts.
@@ -90,12 +109,14 @@ lists are summarised with explicit pointers to these full detail tables.
 JSON assessments also expose
 `error_summary`, `hidden_groups` and `input_groups`.
 
-The tab schema adds `tab_visibility` and `tab_roles`; the file schema adds
-`logic_types`. `upstream_dependencies.value` is now an object with
+The tab schema adds `tab_visibility` and `tab_roles`; the file schema includes
+`scan_status`, `scan_error`, `sheet_count_total`, `sheet_count_hidden`,
+`process`, `sub_process` and `logic_types`. Client-facing reports omit file
+size, full SHA-256 and raw source path; the short File ID remains. Raw scan JSON
+continues to retain technical metadata for diagnostics. `upstream_dependencies.value` is an object with
 `within_workbook`, `external_files`, `unresolved_external` and `scope`, replacing
-the old flat list. Calculation fields retain technical evidence in their JSON
-objects but lead with a business-facing `summary`. Review verdicts deliberately
-use candidate/unknown language where the previous version overstated certainty.
+the old flat list. Review verdicts deliberately use candidate/unknown language
+where the previous version overstated certainty.
 
 Validation uses the repository fixtures and additional regression cases for
 mixed-role tabs, hidden support logic, transitive error exposure, external-link
