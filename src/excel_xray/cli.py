@@ -23,7 +23,7 @@ from .assessment import assess
 from .assessment import to_dict as assessment_to_dict
 from .report import write_report
 from .excel_report import is_excel_report, write_excel_report, write_estate_excel_report
-from .scan import UnreadableWorkbook, to_json, xray_workbook
+from .scan import UnreadableWorkbook, failed_workbook, to_json, xray_workbook
 
 EXTS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 SKIP_PREFIX = ("~$", ".")
@@ -160,6 +160,12 @@ def main() -> int:
             failed += 1
             reasons.setdefault(e.category, []).append(os.path.basename(p))
             print(f"SKIPPED  {os.path.basename(p):46} {e}  ({elapsed:.2f}s)", file=sys.stderr)
+            wx = failed_workbook(p, str(e))
+            timings[p] = elapsed
+            if args.json:
+                print(to_json(wx))
+            else:
+                batch.append((p, wx))
             continue
         except Exception as e:  # noqa: BLE001 - report and keep going over a corpus
             elapsed = time.perf_counter() - t0
@@ -169,6 +175,12 @@ def main() -> int:
                   f"({elapsed:.2f}s)", file=sys.stderr)
             if os.environ.get("XRAY_DEBUG"):
                 traceback.print_exc()
+            wx = failed_workbook(p, f"{type(e).__name__}: {e}")
+            timings[p] = elapsed
+            if args.json:
+                print(to_json(wx))
+            else:
+                batch.append((p, wx))
             continue
         elapsed = time.perf_counter() - t0
         timings[p] = elapsed
@@ -231,22 +243,28 @@ def main() -> int:
             from .estate import build_estate
             from .estate_insight import generate_estate_insight
             from .estate_report import write_estate_csv, write_estate_report
-            pairs_in = [(wx, a) for (_, wx), a in zip(batch, assessments)]
-            estate = build_estate(pairs_in)
-            insight_assessor = _estate_assessor(args)
-            insight = generate_estate_insight(estate, insight_assessor)
-            html_path = os.path.join(outdir, "estate.html")
-            csv_path = os.path.join(outdir, "estate_pairs.csv")
-            if args.format == "xlsx":
-                report_path = os.path.join(outdir, "estate.xlsx")
-                write_estate_excel_report(estate, report_path, insight, paths)
+            pairs_in = [(wx, a) for (_, wx), a in zip(batch, assessments)
+                        if wx.parse_status != "failed"]
+            if len(pairs_in) < 2:
+                print("--estate needs at least two successfully read workbooks to compare",
+                      file=sys.stderr)
             else:
-                report_path = html_path
-                write_estate_report(estate, html_path, insight)
-                write_estate_csv(estate, csv_path)
-            print(f"{len(estate.fingerprints)} workbooks  "
-                  f"{len(estate.clusters)} families  {len(estate.pairs)} linked pairs"
-                  f"  -> {report_path}", file=sys.stderr)
+                estate = build_estate(pairs_in)
+                insight_assessor = _estate_assessor(args)
+                insight = generate_estate_insight(estate, insight_assessor)
+                html_path = os.path.join(outdir, "estate.html")
+                csv_path = os.path.join(outdir, "estate_pairs.csv")
+                if args.format == "xlsx":
+                    report_path = os.path.join(outdir, "estate.xlsx")
+                    write_estate_excel_report(estate, report_path, insight,
+                                              [wx.path for wx, _ in pairs_in])
+                else:
+                    report_path = html_path
+                    write_estate_report(estate, html_path, insight)
+                    write_estate_csv(estate, csv_path)
+                print(f"{len(estate.fingerprints)} workbooks  "
+                      f"{len(estate.clusters)} families  {len(estate.pairs)} linked pairs"
+                      f"  -> {report_path}", file=sys.stderr)
 
     total = len(paths)
     print(f"\ncoverage: {ok}/{total} full, {partial} partial, {failed} unreadable",

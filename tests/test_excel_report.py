@@ -1,6 +1,7 @@
 """Excel exports preserve assessment evidence and do not modify inputs."""
 
 import copy
+import csv
 import hashlib
 import shutil
 import sys
@@ -134,3 +135,27 @@ def test_json_rejects_silently_ignored_exports(fixture_path, monkeypatch):
     with pytest.raises(SystemExit) as error:
         run_cli(monkeypatch, fixture_path, "--json", "--estate")
     assert error.value.code == 2
+
+
+def test_failed_scan_is_exported_to_excel_csv_and_assessment_json(tmp_path, monkeypatch, capsys):
+    bad = tmp_path / "broken.xlsx"
+    bad.write_bytes(b"not an OOXML workbook")
+
+    assert run_cli(monkeypatch, bad, "--assess") == 0
+    payload = __import__("json").loads(capsys.readouterr().out)
+    assert payload["file"]["scan_status"]["value"] == "failed"
+    assert "not a zip container" in payload["file"]["scan_error"]["value"]
+
+    out = tmp_path / "reports"
+    csv_path = out / "assessment.csv"
+    assert run_cli(monkeypatch, bad, "-o", out, "--csv", csv_path) == 0
+    report = out / "xray_broken.xlsx"
+    assert is_excel_report(report)
+    _, rows = read_sheet(report, 1)
+    status = next(row for row in rows if "Scan Status" in row.values())
+    error = next(row for row in rows if "Scan Error" in row.values())
+    assert "failed" in status.values()
+    assert any("not a zip container" in value for value in error.values())
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        csv_rows = list(csv.DictReader(fh))
+    assert any(r["Field"] == "Scan Status" and r["Value"] == "failed" for r in csv_rows)

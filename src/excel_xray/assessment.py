@@ -847,6 +847,20 @@ def assess(wx: WorkbookXray, assessor=None) -> Assessment:
     a = Assessment(file=assess_file(wx), tabs=tabs)
     _business_review(a, wx, reads, read_by)
 
+    if wx.parse_status == "failed":
+        for fld in (a.file.purpose_of_file, a.file.key_output_outcome):
+            fld.value = "Not established — scan failed"
+            fld.basis = "needs_human"
+            fld.evidence = ["Resolve Scan Error and rerun before assessing this field"]
+        a.file.key_outputs.value = ["Not established — scan failed"]
+        a.file.key_outputs.basis = "needs_human"
+        a.file.key_outputs.evidence = ["Resolve Scan Error and rerun before assessing outputs"]
+        for fld in (a.file.process, a.file.sub_process):
+            fld.value = "Not established — owner confirmation required"
+            fld.basis = "needs_human"
+            fld.evidence = ["Workbook content was unavailable because the scan failed"]
+        return a
+
     assessor = assessor or OfflineAssessor()
     narr = assessor.narrate(build_bundle(a, wx))
     _apply_narrative(a, narr, assessor.basis, assessor.label)

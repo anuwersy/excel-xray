@@ -187,6 +187,26 @@ def xray_workbook(path: str, max_rows: int = 200_000) -> WorkbookXray:
     return wx
 
 
+def failed_workbook(path: str, error: str) -> WorkbookXray:
+    """Create a metadata-only result so failed scans remain exportable.
+
+    This does not hide or downgrade the failure. It preserves the same internal
+    identity metadata as a successful scan while giving the assessment/report
+    layers a row on which to expose Scan Status and Scan Error.
+    """
+    st = os.stat(path)
+    message = str(error).replace(os.path.abspath(path), os.path.basename(path))
+    return WorkbookXray(
+        path=os.path.abspath(path),
+        filename=os.path.basename(path),
+        size_bytes=st.st_size,
+        sha256=_sha256(path),
+        fs_modified=_dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+        parse_status="failed",
+        warnings=[message],
+    )
+
+
 def _xray_sheet(zf, sref, sstruct, shared, styles, max_rows: int) -> SheetXray:
     merges = sstruct.merges if sstruct else []
     tables = sstruct.tables if sstruct else []

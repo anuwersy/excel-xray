@@ -151,6 +151,10 @@ def assess_corpus(workbooks: list[WorkbookXray], assessor=None) -> list:
     results = [assess(wx, assessor) for wx in workbooks]
     fps = [fingerprint(wx, a) for wx, a in zip(workbooks, results)]
     for i, (a, fp) in enumerate(zip(results, fps)):
-        others = [fps[j] for j in range(len(fps)) if j != i]
+        if workbooks[i].parse_status == "failed":
+            _apply_corpus(a, fp, [])
+            continue
+        others = [fps[j] for j in range(len(fps))
+                  if j != i and workbooks[j].parse_status != "failed"]
         _apply_corpus(a, fp, others)
     return results
